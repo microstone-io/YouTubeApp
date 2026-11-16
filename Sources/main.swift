@@ -1,7 +1,7 @@
 import Cocoa
 import WebKit
 
-// Native UserScript: Ad-Free, Auto 4K/1080p Max Quality, Cinema Mode, Native macOS Draggable Titlebar
+// Native UserScript: Ad-Free, Auto 4K/1080p Max Quality, Zero-Border Full-Window 16:9 Cinema Mode (like FikFap)
 let injectedScript = """
 (function() {
     'use strict';
@@ -9,9 +9,9 @@ let injectedScript = """
     if (!window.location.hostname.includes('youtube.com')) {
         return;
     }
-    console.log('[YouTube Native App] Cinema Engine Active');
+    console.log('[YouTube Native App] Zero-Border Cinema Engine Active');
 
-    // 1. INJECT CLEAN CINEMA STYLES & AD BLOCKING RULES
+    // 1. 注入强力清除广告与 100% 满幅无黑边影院 CSS
     const style = document.createElement('style');
     style.id = 'yt-native-clean-styles';
     style.textContent = `
@@ -40,7 +40,7 @@ let injectedScript = """
             overflow: hidden !important;
         }
 
-        /* 2. 原生顶部标题栏适配（留出顶部 28px 供窗口拖动） */
+        /* 2. 首页顶部标题栏留出 28px 原生拖拽区 */
         #masthead-container {
             padding-top: 28px !important;
             background-color: rgba(15, 15, 15, 0.95) !important;
@@ -53,41 +53,91 @@ let injectedScript = """
             margin-top: 84px !important;
         }
 
-        /* 3. 沉浸式极简影院模式 (Cinema Mode) */
-        body.cinema-playing #masthead-container {
-            opacity: 0 !important;
-            transform: translateY(-100%) !important;
-            pointer-events: none !important;
+        /* 3. 彻底消除上下左右所有黑边：100% 满幅无边框影院填充 */
+        body.cinema-mode-active #masthead-container {
+            display: none !important;
         }
 
-        body.cinema-playing #secondary,
-        body.cinema-playing #below,
-        body.cinema-playing #comments,
-        body.cinema-playing #chat-container {
-            opacity: 0 !important;
+        body.cinema-mode-active ytd-watch-flexy #player-theater-container,
+        body.cinema-mode-active ytd-watch-flexy #full-bleed-container,
+        body.cinema-mode-active ytd-watch-flexy #player-container-outer,
+        body.cinema-mode-active ytd-watch-flexy #player-container-inner,
+        body.cinema-mode-active ytd-watch-flexy #player-container,
+        body.cinema-mode-active ytd-watch-flexy #player,
+        body.cinema-mode-active ytd-watch-flexy ytd-player,
+        body.cinema-mode-active #ytd-player,
+        body.cinema-mode-active #container.ytd-player,
+        body.cinema-mode-active #movie_player,
+        body.cinema-mode-active .html5-video-player,
+        body.cinema-mode-active .html5-video-container {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            min-height: 100vh !important;
+            min-width: 100vw !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            z-index: 1000 !important;
+            background: #000000 !important;
+            overflow: hidden !important;
+        }
+
+        /* 视频本身满幅铺满视口，消除四边所有黑边 */
+        body.cinema-mode-active video.html5-main-video,
+        body.cinema-mode-active video {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            min-width: 100vw !important;
+            min-height: 100vh !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            object-fit: cover !important;
+            transform: none !important;
+        }
+
+        /* 控制栏贴合底部，增加平滑渐隐 */
+        body.cinema-mode-active .ytp-chrome-bottom {
+            width: calc(100% - 24px) !important;
+            left: 12px !important;
+            bottom: 8px !important;
             transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
-            pointer-events: none !important;
         }
 
+        body.cinema-mode-active .ytp-chrome-top,
+        body.cinema-mode-active .ytp-gradient-bottom,
+        body.cinema-mode-active .ytp-gradient-top {
+            transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+
+        /* 静止 2.5s 后播放器控件与顶部覆盖层自动平滑渐隐 */
         body.cinema-playing .ytp-chrome-bottom,
         body.cinema-playing .ytp-chrome-top,
         body.cinema-playing .ytp-gradient-bottom,
         body.cinema-playing .ytp-gradient-top {
             opacity: 0 !important;
-            transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            pointer-events: none !important;
         }
 
-        /* 鼠标悬停或轻触时平滑浮现控件 */
-        body.cinema-active #masthead-container,
-        body.cinema-active #secondary,
-        body.cinema-active #below,
-        body.cinema-active #comments,
         body.cinema-active .ytp-chrome-bottom,
         body.cinema-active .ytp-chrome-top,
         body.cinema-active .ytp-gradient-bottom,
         body.cinema-active .ytp-gradient-top {
             opacity: 1 !important;
-            transform: translateY(0) !important;
             pointer-events: auto !important;
         }
 
@@ -100,7 +150,58 @@ let injectedScript = """
         ytd-app,
         #page-manager,
         ytd-watch-flexy {
-            background-color: #050507 !important;
+            background-color: #000000 !important;
+        }
+
+        /* 4. 原生浮动按钮 (返回按钮与视图切换) */
+        #yt-native-back-btn,
+        #yt-native-toggle-btn {
+            display: none;
+            position: fixed;
+            z-index: 999999;
+            padding: 7px 15px;
+            background: rgba(20, 20, 25, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.3s ease, background 0.2s ease, transform 0.15s ease;
+            user-select: none;
+            -webkit-user-select: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        }
+
+        #yt-native-back-btn {
+            top: 14px;
+            left: 82px;
+        }
+
+        #yt-native-toggle-btn {
+            top: 14px;
+            right: 20px;
+        }
+
+        #yt-native-back-btn:hover,
+        #yt-native-toggle-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+            transform: scale(1.04);
+        }
+
+        body.cinema-mode-active.cinema-active #yt-native-back-btn,
+        body.cinema-mode-active.cinema-active #yt-native-toggle-btn {
+            display: block !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        body.cinema-playing #yt-native-back-btn,
+        body.cinema-playing #yt-native-toggle-btn {
+            opacity: 0 !important;
+            pointer-events: none !important;
         }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -170,7 +271,6 @@ let injectedScript = """
 
         const levels = player.getAvailableQualityLevels();
         if (levels && levels.length > 0) {
-            // 按清晰度排序找出最高画质
             let bestQuality = levels[0];
             let bestScore = qualityRank[bestQuality] || 0;
 
@@ -195,7 +295,124 @@ let injectedScript = """
         }
     }
 
-    // 4. 沉浸式影院模式交互隐显控制 (鼠标静止 2.5s 自动淡出)
+    // 4. 强制视频元素无黑边铺满视口
+    function fitVideoToWindow() {
+        if (!window.location.pathname.includes('/watch') || !isCinemaModeEnabled) return;
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (video) {
+            video.style.setProperty('position', 'fixed', 'important');
+            video.style.setProperty('top', '0px', 'important');
+            video.style.setProperty('left', '0px', 'important');
+            video.style.setProperty('right', '0px', 'important');
+            video.style.setProperty('bottom', '0px', 'important');
+            video.style.setProperty('width', '100vw', 'important');
+            video.style.setProperty('height', '100vh', 'important');
+            video.style.setProperty('max-width', '100vw', 'important');
+            video.style.setProperty('max-height', '100vh', 'important');
+            video.style.setProperty('object-fit', 'cover', 'important');
+            video.style.setProperty('transform', 'none', 'important');
+        }
+
+        const player = document.getElementById('movie_player');
+        if (player) {
+            player.style.setProperty('position', 'fixed', 'important');
+            player.style.setProperty('top', '0px', 'important');
+            player.style.setProperty('left', '0px', 'important');
+            player.style.setProperty('width', '100vw', 'important');
+            player.style.setProperty('height', '100vh', 'important');
+            player.style.setProperty('z-index', '1000', 'important');
+        }
+    }
+
+    // 5. 浮动返回与模式切换按钮创建
+    function ensureOverlayButtons() {
+        let backBtn = document.getElementById('yt-native-back-btn');
+        if (!backBtn) {
+            backBtn = document.createElement('button');
+            backBtn.id = 'yt-native-back-btn';
+            backBtn.innerHTML = '‹ 返回首页';
+            backBtn.title = '返回首页 (快捷键 Esc)';
+            backBtn.onclick = function() {
+                if (window.history.length > 1) {
+                    window.history.back();
+                } else {
+                    window.location.href = 'https://www.youtube.com';
+                }
+            };
+            document.body.appendChild(backBtn);
+        }
+
+        let toggleBtn = document.getElementById('yt-native-toggle-btn');
+        if (!toggleBtn) {
+            toggleBtn = document.createElement('button');
+            toggleBtn.id = 'yt-native-toggle-btn';
+            toggleBtn.innerHTML = '💬 展开评论与推荐';
+            toggleBtn.title = '切换影院满屏 / 标准详情 (快捷键 W)';
+            toggleBtn.onclick = function() {
+                toggleCinemaMode();
+            };
+            document.body.appendChild(toggleBtn);
+        }
+    }
+
+    let isCinemaModeEnabled = true;
+    function toggleCinemaMode() {
+        isCinemaModeEnabled = !isCinemaModeEnabled;
+        const toggleBtn = document.getElementById('yt-native-toggle-btn');
+        if (isCinemaModeEnabled) {
+            document.body.classList.add('cinema-mode-active');
+            if (toggleBtn) toggleBtn.innerHTML = '💬 展开评论与推荐';
+            fitVideoToWindow();
+        } else {
+            document.body.classList.remove('cinema-mode-active');
+            document.body.classList.remove('cinema-playing');
+            document.body.classList.remove('hide-cursor');
+            if (toggleBtn) toggleBtn.innerHTML = '🎬 影院满幅';
+            const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+            if (video) {
+                video.style.removeProperty('position');
+                video.style.removeProperty('top');
+                video.style.removeProperty('left');
+                video.style.removeProperty('width');
+                video.style.removeProperty('height');
+                video.style.removeProperty('object-fit');
+            }
+        }
+    }
+
+    function ensureTheaterMode() {
+        const watchFlexy = document.querySelector('ytd-watch-flexy');
+        if (!watchFlexy) return;
+        if (!watchFlexy.hasAttribute('theater')) {
+            const theaterBtn = document.querySelector('button.ytp-size-button');
+            if (theaterBtn) {
+                theaterBtn.click();
+            }
+        }
+    }
+
+    // 6. 监听路由与播放状态更新
+    function updateWatchState() {
+        const isWatch = window.location.pathname.includes('/watch');
+        if (isWatch) {
+            if (isCinemaModeEnabled) {
+                document.body.classList.add('cinema-mode-active');
+                document.body.classList.add('cinema-active');
+                fitVideoToWindow();
+            }
+            ensureOverlayButtons();
+            ensureTheaterMode();
+            lockMaxResolution();
+            skipVideoAds();
+        } else {
+            document.body.classList.remove('cinema-mode-active');
+            document.body.classList.remove('cinema-playing');
+            document.body.classList.remove('cinema-active');
+            document.body.classList.remove('hide-cursor');
+        }
+    }
+
+    // 7. 沉浸式隐显交互控制 (鼠标静止 2.5s 自动淡出)
     let cinemaTimer = null;
     function handleUserActivity() {
         document.body.classList.remove('cinema-playing');
@@ -209,7 +426,7 @@ let injectedScript = """
             const video = document.querySelector('video');
             const isPlaying = video && !video.paused && video.currentTime > 0;
 
-            if (isWatchPage && isPlaying) {
+            if (isWatchPage && isPlaying && document.body.classList.contains('cinema-mode-active')) {
                 document.body.classList.remove('cinema-active');
                 document.body.classList.add('cinema-playing');
                 document.body.classList.add('hide-cursor');
@@ -222,44 +439,70 @@ let injectedScript = """
     window.addEventListener('click', handleUserActivity, { passive: true });
     window.addEventListener('wheel', handleUserActivity, { passive: true });
     window.addEventListener('keydown', handleUserActivity, { passive: true });
+    window.addEventListener('resize', fitVideoToWindow);
 
-    // 5. 全局周期性轮询与页面切歌监听
+    // 8. 全局周期性轮询与页面切歌监听
     setInterval(() => {
         skipVideoAds();
         lockMaxResolution();
-    }, 250);
+        updateWatchState();
+        fitVideoToWindow();
+    }, 400);
 
     window.addEventListener('yt-navigate-finish', () => {
         lastQualityLockedVideo = '';
-        setTimeout(lockMaxResolution, 500);
+        setTimeout(updateWatchState, 300);
+        setTimeout(fitVideoToWindow, 500);
+        setTimeout(lockMaxResolution, 600);
         setTimeout(skipVideoAds, 300);
     });
 
-    // 6. 快捷键优化 (C 键切换剧场/影院聚焦)
+    window.addEventListener('popstate', updateWatchState);
+
+    // 9. 全局快捷键优化
     window.addEventListener('keydown', (e) => {
         const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
         if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) {
             return;
         }
 
-        if (e.key === 'c' || e.key === 'C') {
-            const theaterBtn = document.querySelector('button.ytp-size-button');
-            if (theaterBtn) {
-                theaterBtn.click();
+        if (e.key === 'Escape') {
+            if (window.location.pathname.includes('/watch')) {
+                if (window.history.length > 1) {
+                    window.history.back();
+                } else {
+                    window.location.href = 'https://www.youtube.com';
+                }
+            }
+        } else if (e.key === 'w' || e.key === 'W') {
+            toggleCinemaMode();
+        } else if (e.key === 'f' || e.key === 'F') {
+            const fsBtn = document.querySelector('button.ytp-fullscreen-button');
+            if (fsBtn) {
+                fsBtn.click();
             }
         }
     });
 })();
 """
 
-// 顶部 28px 原生拖拽标题栏 (x: 0...75 留给红黄绿，其余整条横向支持无缝拖拽)
+// 顶部 28px 原生拖拽标题栏：避让左侧交通灯与浮动按钮，其余中间宽广区域支持拖动与双击全屏
 class DraggableTitleBar: NSView {
     override var mouseDownCanMoveWindow: Bool {
         return true
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if point.x < 75 {
+        // 0...80 留给红黄绿交通灯
+        if point.x < 80 {
+            return nil
+        }
+        // 80...220 留给左上角浮动返回按钮
+        if point.x < 220 {
+            return nil
+        }
+        // 右侧 200px 留给右上角展开按钮
+        if point.x > (bounds.width - 200) {
             return nil
         }
         return super.hitTest(point)
@@ -267,7 +510,7 @@ class DraggableTitleBar: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            window?.performZoom(nil)
+            window?.toggleFullScreen(nil)
         } else {
             window?.performDrag(with: event)
         }
@@ -284,8 +527,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         guard let url = URL(string: targetURLString) else { return }
 
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let defaultWidth: CGFloat = 1120
-        let defaultHeight: CGFloat = 700
+        // 默认 16:9 黄金分辨率比例：1280 × 720
+        let defaultWidth: CGFloat = 1280
+        let defaultHeight: CGFloat = 720
         let originX = screenFrame.midX - (defaultWidth / 2)
         let originY = screenFrame.midY - (defaultHeight / 2)
         let windowRect = NSRect(x: originX, y: originY, width: defaultWidth, height: defaultHeight)
@@ -298,10 +542,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         )
         window.delegate = self
         window.minSize = NSSize(width: 640, height: 360)
+        // 锁定 16:9 黄金观影比例，彻底杜绝黑边
+        window.aspectRatio = NSSize(width: 16, height: 9)
+        // 启用原生全屏支持，支持绿灯按钮与 HTML5 网页全屏联动
+        window.collectionBehavior = [.fullScreenPrimary, .fullScreenAllowsTiling]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
-        window.backgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.07, alpha: 1.0)
+        window.backgroundColor = NSColor.black
 
         // WebKit 配置 (启用持久化 Cookie 数据存储)
         let configuration = WKWebViewConfiguration()
@@ -329,14 +577,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.allowsBackForwardNavigationGestures = true
 
-        // 采用桌面版 Chrome User-Agent：
-        // 1. 完全防止 macOS Sonoma/Sequoia 将 YouTube/Google 导航拦截并跳转到系统 Safari Web App
-        // 2. 避免 Google 登录出现 "This browser or app may not be secure" 警告
+        // 采用桌面版 Chrome User-Agent
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-        // 设置暗色底色，避免加载页面或跳转时出现白屏眩光
+        // 设置全黑底色，消除任何浅色边框与白屏眩光
         if #available(macOS 12.0, *) {
-            webView.underPageBackgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.07, alpha: 1.0)
+            webView.underPageBackgroundColor = NSColor.black
         }
         webView.setValue(false, forKey: "drawsBackground")
 
@@ -438,12 +684,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             return
         }
 
-        // 描述栏里的外部链接（如 Twitter、GitHub、博客等）通过系统默认浏览器打开，不干扰客户端播放
+        // 描述栏里的外部链接通过系统默认浏览器打开，不干扰客户端播放
         NSWorkspace.shared.open(targetURL)
         decisionHandler(.cancel)
     }
 
-    // 针对 window.open 调用的委托实现
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if navigationAction.targetFrame == nil {
             if let targetURL = navigationAction.request.url, targetURL.absoluteString != "about:blank" {
@@ -453,7 +698,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         return nil
     }
 
-    // 登录成功后如果停留在 Google 账号管理或回调中间页，自动带回 YouTube 首页
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let url = webView.url {
             let host = url.host ?? ""
@@ -506,6 +750,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // View Menu
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
+        let fullScreenItem = NSMenuItem(title: "Toggle Full Screen", action: #selector(toggleFullScreen), keyEquivalent: "f")
+        fullScreenItem.keyEquivalentModifierMask = [.command, .control]
+        fullScreenItem.target = self
+        viewMenu.addItem(fullScreenItem)
+        viewMenu.addItem(NSMenuItem.separator())
+
         let reloadItem = NSMenuItem(title: "Reload", action: #selector(reloadPage), keyEquivalent: "r")
         reloadItem.target = self
         viewMenu.addItem(reloadItem)
@@ -548,6 +798,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         NSApp.mainMenu = mainMenu
     }
 
+    @objc func toggleFullScreen() {
+        window.toggleFullScreen(nil)
+    }
     @objc func goHome() {
         if let url = URL(string: "https://www.youtube.com") {
             webView.load(URLRequest(url: url))
