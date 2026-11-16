@@ -13,6 +13,28 @@ let injectedScript = """
     }
     console.log('[YouTube Native App] Dual-Engine (16:9 Cinema + 9:16 FikFap Mode) Active');
 
+    // 0. 竖屏模式强制禁止 video loop 循环，让短视频能顺利触发自然播放结束 (复刻 FikFap 核心机制)
+    try {
+        const origLoopDescriptor = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'loop');
+        Object.defineProperty(HTMLVideoElement.prototype, 'loop', {
+            get: function() {
+                if (window.location.pathname.includes('/shorts') || currentVideoMode === 'vertical') {
+                    return false;
+                }
+                return origLoopDescriptor && origLoopDescriptor.get ? origLoopDescriptor.get.call(this) : false;
+            },
+            set: function(val) {
+                if (window.location.pathname.includes('/shorts') || currentVideoMode === 'vertical') {
+                    return;
+                }
+                if (origLoopDescriptor && origLoopDescriptor.set) {
+                    origLoopDescriptor.set.call(this, val);
+                }
+            },
+            configurable: true
+        });
+    } catch(e) {}
+
     // 1. 注入强力清除广告、消除滚动条、16:9 与 9:16 双模式 CSS
     const style = document.createElement('style');
     style.id = 'yt-native-clean-styles';
@@ -165,73 +187,113 @@ let injectedScript = """
             display: none !important;
         }
 
-        body.cinema-vertical-mode ytd-shorts,
-        body.cinema-vertical-mode ytd-shorts #shorts-container,
-        body.cinema-vertical-mode ytd-reel-video-renderer[is-active],
-        body.cinema-vertical-mode ytd-reel-video-renderer[is-active] #player-container,
-        body.cinema-vertical-mode ytd-reel-video-renderer[is-active] .html5-video-player,
-        body.cinema-vertical-mode ytd-reel-video-renderer[is-active] .html5-video-container {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            bottom: 0 !important;
-            width: 100vw !important;
+        /* 解决竖屏顶部 84px 空白与底部拉长问题：重置 page-manager 边距 */
+        body.cinema-vertical-mode #page-manager {
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+            margin-bottom: 0 !important;
+            padding-bottom: 0 !important;
             height: 100vh !important;
-            max-width: 100vw !important;
             max-height: 100vh !important;
-            min-width: 100vw !important;
-            min-height: 100vh !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            border: none !important;
-            z-index: 1000 !important;
-            background: #000000 !important;
-            overflow: hidden !important;
         }
 
-        /* 竖屏复制 FikFap 满幅填充，100% 满屏无黑边 */
-        body.cinema-vertical-mode ytd-reel-video-renderer[is-active] video,
-        body.cinema-vertical-mode video.html5-main-video,
-        body.cinema-vertical-mode video {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            bottom: 0 !important;
+        /* 隐藏冗余按钮：隐藏网页端上/下切换箭头与详情切换按钮 */
+        body.cinema-vertical-mode #navigation-button-up,
+        body.cinema-vertical-mode #navigation-button-down,
+        body.cinema-vertical-mode #yt-native-toggle-btn {
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+
+        body.cinema-vertical-mode ytd-shorts {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+        }
+
+        body.cinema-vertical-mode #shorts-container {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        body.cinema-vertical-mode ytd-reel-video-renderer {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            padding-bottom: 0 !important;
+        }
+
+        body.cinema-vertical-mode ytd-reel-video-renderer #player-container,
+        body.cinema-vertical-mode ytd-reel-video-renderer .html5-video-player,
+        body.cinema-vertical-mode ytd-reel-video-renderer .html5-video-container {
             width: 100vw !important;
             height: 100vh !important;
             max-width: 100vw !important;
             max-height: 100vh !important;
             min-width: 100vw !important;
             min-height: 100vh !important;
+            border-radius: 0 !important;
             margin: 0 !important;
             padding: 0 !important;
-            border: none !important;
+            background: #000000 !important;
+        }
+
+        /* 竖屏视频 100% 满幅贴合 9:16 视口，无任何黑边，消除底部拉长空缺 */
+        body.cinema-vertical-mode ytd-reel-video-renderer video,
+        body.cinema-vertical-mode video.html5-main-video,
+        body.cinema-vertical-mode video {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            min-width: 100vw !important;
+            min-height: 100vh !important;
             object-fit: cover !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            top: 0 !important;
+            left: 0 !important;
             transform: none !important;
         }
 
-        /* 竖屏交互控件 (点赞、评论、标题等) 平滑显隐 */
+        /* 竖屏交互控件 (点赞、评论、标题、返回等) 平滑显隐，复刻 FikFap */
         body.cinema-vertical-mode ytd-reel-video-renderer #actions,
         body.cinema-vertical-mode ytd-reel-video-renderer .ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode #navigation-button-up,
-        body.cinema-vertical-mode #navigation-button-down {
-            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        body.cinema-vertical-mode ytd-reel-video-renderer ytd-reel-player-header-renderer,
+        body.cinema-vertical-mode ytd-reel-video-renderer .ytd-reel-player-overlay-renderer,
+        body.cinema-vertical-mode ytd-reel-video-renderer #overlay,
+        body.cinema-vertical-mode #yt-native-back-btn {
+            transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
         }
 
         body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer #actions,
         body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer .ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode.cinema-playing #navigation-button-up,
-        body.cinema-vertical-mode.cinema-playing #navigation-button-down {
+        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer ytd-reel-player-header-renderer,
+        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer .ytd-reel-player-overlay-renderer,
+        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer #overlay,
+        body.cinema-vertical-mode.cinema-playing #yt-native-back-btn {
             opacity: 0 !important;
             pointer-events: none !important;
         }
 
         body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer #actions,
         body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer .ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode.cinema-active #navigation-button-up,
-        body.cinema-vertical-mode.cinema-active #navigation-button-down {
+        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer ytd-reel-player-header-renderer,
+        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer .ytd-reel-player-overlay-renderer,
+        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer #overlay,
+        body.cinema-vertical-mode.cinema-active #yt-native-back-btn {
             opacity: 1 !important;
             pointer-events: auto !important;
         }
@@ -479,69 +541,91 @@ let injectedScript = """
         }
     }
 
-    // 5. 竖屏专用下一个与上一个视频调度 (FikFap 模式)
+    // 5. 准确定位当前视口中心或正在播放的视频 (复刻 FikFap 算法)
+    function getActiveVideo() {
+        const videos = Array.from(document.querySelectorAll('video'));
+        if (videos.length === 0) return null;
+        if (videos.length === 1) return videos[0];
+
+        for (const v of videos) {
+            if (!v.paused && v.currentTime > 0) return v;
+        }
+
+        const centerY = window.innerHeight / 2;
+        for (const v of videos) {
+            const rect = v.getBoundingClientRect();
+            if (rect.top <= centerY && rect.bottom >= centerY && rect.height > 100) {
+                return v;
+            }
+        }
+        return videos[0];
+    }
+
+    // 6. 竖屏专用下一个与上一个视频调度 (调用 Swift 原生硬件级按键，复刻 FikFap)
+    let isAdvanceLocked = false;
     function playNextVerticalVideo() {
-        console.log('[FikFapEngine] Advancing to next vertical video...');
-        const nextShortsBtn = document.querySelector('ytd-reel-video-renderer[is-active] #navigation-button-down button') ||
-                              document.querySelector('#navigation-button-down button');
+        if (isAdvanceLocked) return;
+        isAdvanceLocked = true;
+        setTimeout(() => { isAdvanceLocked = false; }, 1800);
+
+        console.log('[FikFapEngine] Advancing to next vertical video via native bridge...');
+        showToast('⏭ 切换下一个');
+        try {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.youtubeBridge) {
+                window.webkit.messageHandlers.youtubeBridge.postMessage({ action: 'nextVideo' });
+                return;
+            }
+        } catch(e) {}
+
+        const nextShortsBtn = document.querySelector('#navigation-button-down button') ||
+                              document.querySelector('ytd-reel-video-renderer #navigation-button-down button');
         if (nextShortsBtn) {
             nextShortsBtn.click();
             return;
         }
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
     }
 
     function playPrevVerticalVideo() {
-        console.log('[FikFapEngine] Returning to previous vertical video...');
-        const prevShortsBtn = document.querySelector('ytd-reel-video-renderer[is-active] #navigation-button-up button') ||
-                              document.querySelector('#navigation-button-up button');
+        if (isAdvanceLocked) return;
+        isAdvanceLocked = true;
+        setTimeout(() => { isAdvanceLocked = false; }, 1800);
+
+        console.log('[FikFapEngine] Returning to previous vertical video via native bridge...');
+        showToast('⏮ 切换上一个');
+        try {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.youtubeBridge) {
+                window.webkit.messageHandlers.youtubeBridge.postMessage({ action: 'prevVideo' });
+                return;
+            }
+        } catch(e) {}
+
+        const prevShortsBtn = document.querySelector('#navigation-button-up button') ||
+                              document.querySelector('ytd-reel-video-renderer #navigation-button-up button');
         if (prevShortsBtn) {
             prevShortsBtn.click();
             return;
         }
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, bubbles: true }));
     }
 
-    // 6. 播完后自动切换下一个视频 (横屏与竖屏双适配)
-    function setupAutoPlayNext() {
-        const autoNavBtn = document.querySelector('.ytp-autonav-toggle-button');
-        if (autoNavBtn && autoNavBtn.getAttribute('aria-checked') === 'false') {
-            autoNavBtn.click();
+    // 7. 竖屏短视频播完自动切换下一条 (不循环死锁，复刻 FikFap)
+    function checkShortsAutoPlay() {
+        if (currentVideoMode !== 'vertical' && !window.location.pathname.includes('/shorts')) return;
+        if (isAdvanceLocked) return;
+
+        const video = getActiveVideo();
+        if (!video) return;
+
+        if (video.loop) {
+            video.loop = false;
         }
 
-        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-        if (video && !video._nativeEndedBound) {
-            video._nativeEndedBound = true;
-            video.addEventListener('ended', () => {
-                console.log('[AutoPlay] Video ended naturally, advancing...');
-                showToast('⏭ 播放完毕，正在切换下一个视频');
-                setTimeout(playNextVideo, 800);
-            });
-        }
-    }
-
-    // 7. 竖屏播放自动结束切换 (短视频不无限死循环，播完自动切下一条)
-    function setupShortsAutoPlay() {
-        const video = document.querySelector('ytd-reel-video-renderer[is-active] video') || document.querySelector('video');
-        if (!video || video._shortsAutoPlayBound) return;
-        video._shortsAutoPlayBound = true;
-
-        let hasTriggered = false;
-        video.addEventListener('timeupdate', () => {
-            if (hasTriggered) return;
-            if (video.duration && video.duration > 2.0 && !video.paused) {
-                const remaining = video.duration - video.currentTime;
-                if (remaining <= 0.28 || video.ended) {
-                    hasTriggered = true;
-                    console.log('[FikFapAutoPlay] Vertical short ended naturally. Advancing to next short...');
-                    showToast('⏭ 播放完毕，切换下一个');
-                    setTimeout(() => {
-                        playNextVerticalVideo();
-                        hasTriggered = false;
-                    }, 400);
-                }
+        if (video.duration && video.duration > 2.0 && !video.paused) {
+            const remaining = video.duration - video.currentTime;
+            if (remaining <= 0.35 || video.ended) {
+                console.log('[FikFapAutoPlay] Vertical short ended naturally, advancing to next...');
+                playNextVerticalVideo();
             }
-        });
+        }
     }
 
     // 8. 自动跳过确认弹窗与视频广告
@@ -678,21 +762,21 @@ let injectedScript = """
         document.documentElement.style.setProperty('overflow', 'hidden', 'important');
         document.body.style.setProperty('overflow', 'hidden', 'important');
 
-        const video = document.querySelector('ytd-reel-video-renderer[is-active] video') ||
-                      document.querySelector('video.html5-main-video') ||
-                      document.querySelector('video');
-        if (video) {
-            video.style.setProperty('position', 'fixed', 'important');
-            video.style.setProperty('top', '0px', 'important');
-            video.style.setProperty('left', '0px', 'important');
-            video.style.setProperty('right', '0px', 'important');
-            video.style.setProperty('bottom', '0px', 'important');
-            video.style.setProperty('width', '100vw', 'important');
-            video.style.setProperty('height', '100vh', 'important');
-            video.style.setProperty('max-width', '100vw', 'important');
-            video.style.setProperty('max-height', '100vh', 'important');
-            video.style.setProperty('object-fit', 'cover', 'important'); // 竖屏复制 FikFap 100% 满幅贴合
-            video.style.setProperty('transform', 'none', 'important');
+        const activeVideo = getActiveVideo();
+        if (activeVideo) {
+            activeVideo.style.setProperty('width', '100vw', 'important');
+            activeVideo.style.setProperty('height', '100vh', 'important');
+            activeVideo.style.setProperty('max-width', '100vw', 'important');
+            activeVideo.style.setProperty('max-height', '100vh', 'important');
+            activeVideo.style.setProperty('min-width', '100vw', 'important');
+            activeVideo.style.setProperty('min-height', '100vh', 'important');
+            activeVideo.style.setProperty('object-fit', 'cover', 'important');
+            activeVideo.style.setProperty('border-radius', '0px', 'important');
+            activeVideo.style.setProperty('margin', '0px', 'important');
+            activeVideo.style.setProperty('padding', '0px', 'important');
+            activeVideo.style.setProperty('top', '0px', 'important');
+            activeVideo.style.setProperty('left', '0px', 'important');
+            activeVideo.style.setProperty('transform', 'none', 'important');
         }
     }
 
@@ -812,17 +896,21 @@ let injectedScript = """
             // === 9:16 竖屏模式：复制 FikFap 满幅与交互 ===
             document.body.classList.remove('cinema-mode-active');
             document.body.classList.add('cinema-vertical-mode');
-            document.body.classList.add('cinema-active');
+            if (!document.body.classList.contains('cinema-playing')) {
+                document.body.classList.add('cinema-active');
+            }
             fitVerticalVideo();
             ensureOverlayButtons();
-            setupShortsAutoPlay();
+            checkShortsAutoPlay();
             skipVideoAds();
         } else if (isWatch && mode === 'horizontal') {
             // === 16:9 横屏模式：保持固化的 v1.5.0 影院逻辑 ===
             document.body.classList.remove('cinema-vertical-mode');
             if (isCinemaModeEnabled) {
                 document.body.classList.add('cinema-mode-active');
-                document.body.classList.add('cinema-active');
+                if (!document.body.classList.contains('cinema-playing')) {
+                    document.body.classList.add('cinema-active');
+                }
                 fitVideoToWindow();
             }
             ensureOverlayButtons();
@@ -843,7 +931,7 @@ let injectedScript = """
         }
     }
 
-    // 15. 沉浸式隐显交互控制 (鼠标静止 2.5s 自动淡出)
+    // 15. 沉浸式隐显交互控制 (鼠标静止 2.2s 自动淡出所有控件，复刻 FikFap)
     let cinemaTimer = null;
     function handleUserActivity() {
         document.body.classList.remove('cinema-playing');
@@ -855,20 +943,28 @@ let injectedScript = """
         cinemaTimer = setTimeout(() => {
             const isWatchPage = window.location.pathname.includes('/watch');
             const isShorts = window.location.pathname.includes('/shorts');
-            const video = document.querySelector('video');
-            const isPlaying = video && !video.paused && video.currentTime > 0;
+            const activeVideo = getActiveVideo();
+            const isPlaying = activeVideo && !activeVideo.paused && activeVideo.currentTime > 0;
 
             if ((isWatchPage || isShorts) && isPlaying) {
                 document.body.classList.remove('cinema-active');
                 document.body.classList.add('cinema-playing');
                 document.body.classList.add('hide-cursor');
             }
-        }, 2500);
+        }, 2200);
     }
 
     window.addEventListener('mousemove', handleUserActivity, { passive: true });
     window.addEventListener('mousedown', handleUserActivity, { passive: true });
     window.addEventListener('click', handleUserActivity, { passive: true });
+    window.addEventListener('mouseleave', () => {
+        const activeVideo = getActiveVideo();
+        if (activeVideo && !activeVideo.paused && activeVideo.currentTime > 0) {
+            document.body.classList.remove('cinema-active');
+            document.body.classList.add('cinema-playing');
+        }
+    });
+
     window.addEventListener('resize', () => {
         if (currentVideoMode === 'vertical') fitVerticalVideo();
         else fitVideoToWindow();
@@ -889,15 +985,13 @@ let injectedScript = """
         if (wheelDelta > 75) {
             wheelCooldown = true;
             wheelDelta = 0;
-            showToast('⏭ 下一个视频');
             playNextVideo();
-            setTimeout(() => { wheelCooldown = false; }, 1000);
+            setTimeout(() => { wheelCooldown = false; }, 1200);
         } else if (wheelDelta < -75) {
             wheelCooldown = true;
             wheelDelta = 0;
-            showToast('⏮ 上一个视频');
             playPreviousVideo();
-            setTimeout(() => { wheelCooldown = false; }, 1000);
+            setTimeout(() => { wheelCooldown = false; }, 1200);
         }
 
         clearTimeout(window._wheelResetTimer);
@@ -918,10 +1012,11 @@ let injectedScript = """
     setInterval(() => {
         detectVideoOrientation();
         hookVideoEvents();
+        checkShortsAutoPlay();
         skipVideoAds();
         lockMaxResolution();
         updateWatchState();
-    }, 300);
+    }, 250);
 
     window.addEventListener('yt-navigate-finish', () => {
         lastQualityLockedVideo = '';
@@ -1162,17 +1257,96 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
     }
 
-    // MARK: - WKScriptMessageHandler: 自动响应横屏(16:9)与竖屏(9:16 FikFap模式)切换
+    // MARK: - WKScriptMessageHandler: 自动响应横屏(16:9)与竖屏(9:16 FikFap模式)切换与原生切歌按键
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if message.name == "youtubeBridge",
-           let dict = message.body as? [String: Any],
-           let action = dict["action"] as? String,
-           action == "setAspectRatio",
-           let mode = dict["mode"] as? String {
-            DispatchQueue.main.async { [weak self] in
-                self?.handleAspectRatioChange(mode: mode)
+        guard message.name == "youtubeBridge",
+              let dict = message.body as? [String: Any],
+              let action = dict["action"] as? String else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if action == "nextVideo" {
+                self.sendSingleNativeDownArrow()
+            } else if action == "prevVideo" {
+                self.sendSingleNativeUpArrow()
+            } else if action == "setAspectRatio", let mode = dict["mode"] as? String {
+                self.handleAspectRatioChange(mode: mode)
             }
+        }
+    }
+
+    // 发送原生硬件级真实 Down Arrow 按键事件（复刻 FikFap，完全穿透 WebKit 沙盒）
+    func sendSingleNativeDownArrow() {
+        guard let window = self.window, let webView = self.webView else { return }
+        let char = String(utf16CodeUnits: [0xF701], count: 1)
+        let uptime = ProcessInfo.processInfo.systemUptime
+
+        if let keyDownEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: uptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: char,
+            charactersIgnoringModifiers: char,
+            isARepeat: false,
+            keyCode: 125
+        ) {
+            webView.keyDown(with: keyDownEvent)
+        }
+
+        if let keyUpEvent = NSEvent.keyEvent(
+            with: .keyUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: uptime + 0.05,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: char,
+            charactersIgnoringModifiers: char,
+            isARepeat: false,
+            keyCode: 125
+        ) {
+            webView.keyUp(with: keyUpEvent)
+        }
+    }
+
+    // 发送原生硬件级真实 Up Arrow 按键事件
+    func sendSingleNativeUpArrow() {
+        guard let window = self.window, let webView = self.webView else { return }
+        let char = String(utf16CodeUnits: [0xF700], count: 1)
+        let uptime = ProcessInfo.processInfo.systemUptime
+
+        if let keyDownEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: uptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: char,
+            charactersIgnoringModifiers: char,
+            isARepeat: false,
+            keyCode: 126
+        ) {
+            webView.keyDown(with: keyDownEvent)
+        }
+
+        if let keyUpEvent = NSEvent.keyEvent(
+            with: .keyUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: uptime + 0.05,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: char,
+            charactersIgnoringModifiers: char,
+            isARepeat: false,
+            keyCode: 126
+        ) {
+            webView.keyUp(with: keyUpEvent)
         }
     }
 
@@ -1406,7 +1580,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
-        // 3. View Menu
+        // 3. Control Menu (下一部/上一部视频快捷控制，复刻 FikFap)
+        let controlMenuItem = NSMenuItem()
+        let controlMenu = NSMenu(title: "Control")
+        let nextVideoItem = NSMenuItem(title: "Next Video", action: #selector(triggerNextVideo), keyEquivalent: "\u{F701}")
+        nextVideoItem.target = self
+        controlMenu.addItem(nextVideoItem)
+
+        let prevVideoItem = NSMenuItem(title: "Previous Video", action: #selector(triggerPrevVideo), keyEquivalent: "\u{F700}")
+        prevVideoItem.target = self
+        controlMenu.addItem(prevVideoItem)
+        controlMenuItem.submenu = controlMenu
+        mainMenu.addItem(controlMenuItem)
+
+        // 4. View Menu
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         let fullScreenItem = NSMenuItem(title: "Toggle Full Screen", action: #selector(toggleFullScreen), keyEquivalent: "f")
@@ -1471,6 +1658,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
     @objc func toggleFullScreen() {
         window.toggleFullScreen(nil)
+    }
+
+    @objc func triggerNextVideo() {
+        if currentMode == "vertical" {
+            sendSingleNativeDownArrow()
+        } else {
+            webView.evaluateJavaScript("playNextVideo();", completionHandler: nil)
+        }
+    }
+
+    @objc func triggerPrevVideo() {
+        if currentMode == "vertical" {
+            sendSingleNativeUpArrow()
+        } else {
+            webView.evaluateJavaScript("playPreviousVideo();", completionHandler: nil)
+        }
     }
 
     @objc func toggleOrientation() {
