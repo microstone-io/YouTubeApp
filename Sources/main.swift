@@ -549,15 +549,15 @@ let injectedScript = """
         }
     }
 
-    // 4. 强力“下一个视频”调度 (横屏与竖屏自动分流)
+    // 4. 强力“下一个视频”调度 (横屏与竖屏全场景自动分流)
     function playNextVideo() {
-        if (currentVideoMode === 'vertical' || window.location.pathname.includes('/shorts')) {
+        if (window.location.pathname.includes('/shorts')) {
             playNextVerticalVideo();
             return;
         }
 
-        console.log('[CinemaEngine] Advancing to next horizontal video...');
-        const player = document.getElementById('movie_player');
+        console.log('[CinemaEngine] Advancing to next video...');
+        const player = document.getElementById('movie_player') || document.getElementById('shorts-player');
         if (player && typeof player.nextVideo === 'function') {
             try { player.nextVideo(); return; } catch(e) {}
         }
@@ -587,13 +587,13 @@ let injectedScript = """
     }
 
     function playPreviousVideo() {
-        if (currentVideoMode === 'vertical' || window.location.pathname.includes('/shorts')) {
+        if (window.location.pathname.includes('/shorts')) {
             playPrevVerticalVideo();
             return;
         }
 
-        console.log('[CinemaEngine] Returning to previous horizontal video...');
-        const player = document.getElementById('movie_player');
+        console.log('[CinemaEngine] Returning to previous video...');
+        const player = document.getElementById('movie_player') || document.getElementById('shorts-player');
         if (player && typeof player.previousVideo === 'function') {
             try { player.previousVideo(); return; } catch(e) {}
         }
@@ -609,9 +609,25 @@ let injectedScript = """
         }
     }
 
-    // 5. 准确定位当前正在播放的 Shorts 视频与播放器
+    // 5. 播完后自动切换下一个视频 (普通播放页与通用连播)
+    function setupAutoPlayNext() {
+        const autoNavBtn = document.querySelector('.ytp-autonav-toggle-button');
+        if (autoNavBtn && autoNavBtn.getAttribute('aria-checked') === 'false') {
+            autoNavBtn.click();
+        }
+
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (video && !video._nativeEndedBound) {
+            video._nativeEndedBound = true;
+            video.addEventListener('ended', () => {
+                console.log('[AutoPlay] Video ended naturally on watch page, advancing...');
+                playNextVideo();
+            });
+        }
+    }
+
+    // 6. 准确定位当前正在播放的 Shorts 视频与播放器
     function getActiveVideo() {
-        // 优先获取 Shorts 专用播放器内部的 video 元素，彻底避开 0x0 隐藏的 movie_player video
         const shortsVideo = document.querySelector('#shorts-player video') ||
                             document.querySelector('ytd-reel-video-renderer[is-active] video');
         if (shortsVideo) return shortsVideo;
@@ -634,7 +650,7 @@ let injectedScript = """
         return videos.find(v => v.duration > 0 || (v.src && v.src.length > 0)) || videos[videos.length - 1] || videos[0];
     }
 
-    // 6. 竖屏专用下一个与上一个视频调度 (三维立体驱动：JS 按键事件 + DOM 按钮点击 + Swift 原生硬件按键)
+    // 7. 竖屏专用下一个与上一个视频调度 (三维立体驱动：JS 按键事件 + DOM 按钮点击 + Swift 原生硬件按键)
     let isAdvanceLocked = false;
     function playNextVerticalVideo() {
         if (isAdvanceLocked) return;
@@ -644,11 +660,17 @@ let injectedScript = """
         console.log('[AutoPlay] Executing advance to next Short...');
         showToast('⏭ 播放完毕，切换下一个');
 
-        // 维度 1: 模拟 YouTube 官方 Down 按键事件 (最贴近用户真实操作，触发原生翻页动画)
+        // 若当前在普通 /watch 播放页，直接使用 watch 页切歌机制
+        if (!window.location.pathname.includes('/shorts')) {
+            playNextVideo();
+            return;
+        }
+
+        // 维度 1: 模拟 YouTube 官方 Down 按键事件
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
         window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
 
-        // 维度 2: 遍历点击官方下一条按钮 (免焦点、直接触发 YouTube Reel 翻页)
+        // 维度 2: 遍历点击官方下一条按钮 (最可靠直接)
         const nextSelectors = [
             '#navigation-button-down button',
             'ytd-shorts #navigation-button-down button',
@@ -656,7 +678,9 @@ let injectedScript = """
             'ytd-reel-video-renderer #navigation-button-down button',
             'ytd-reel-video-renderer[is-active] #navigation-button-down button',
             'button[aria-label="下一个视频"]',
-            'button[aria-label="Next video"]'
+            'button[aria-label="Next video"]',
+            '#shorts-container button[aria-label*="下一"]',
+            '#shorts-container button[aria-label*="Next"]'
         ];
         for (const sel of nextSelectors) {
             const btn = document.querySelector(sel);
@@ -681,6 +705,11 @@ let injectedScript = """
 
         console.log('[AutoPlay] Returning to previous Short...');
         showToast('⏮ 切换上一个');
+
+        if (!window.location.pathname.includes('/shorts')) {
+            playPreviousVideo();
+            return;
+        }
 
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38, bubbles: true }));
         window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38, bubbles: true }));
@@ -709,7 +738,7 @@ let injectedScript = """
         } catch(e) {}
     }
 
-    // 7. 竖屏短视频播完自动切换下一条 (URL+高频时间线+峰值门控+回滚捕获全维保障，100% 可靠)
+    // 8. 竖屏短视频播完自动切换下一条 (URL+高频时间线+峰值门控+回滚捕获全维保障，100% 可靠)
     let currentShortsPath = '';
     let shortsMidpointReached = false;
     let shortsAdvanceTriggered = false;
@@ -745,7 +774,7 @@ let injectedScript = """
             video._autoAdvanceHooked = true;
             video.addEventListener('timeupdate', checkShortsAutoPlay, { passive: true });
             video.addEventListener('ended', () => {
-                if (shortsMidpointReached && !shortsAdvanceTriggered) {
+                if (!shortsAdvanceTriggered) {
                     shortsAdvanceTriggered = true;
                     console.log('[AutoPlay] Native video ended event fired. Advancing...');
                     playNextVerticalVideo();
@@ -768,27 +797,34 @@ let injectedScript = """
                 maxPlaybackProgress = curTime;
             }
 
-            // 步骤 1：播放超过 35% 时长确认为正常观看（进入下半段门控）
-            if (maxPlaybackProgress >= dur * 0.35) {
+            // 步骤 1：播放超过 30% 时长确认为正常观看
+            if (maxPlaybackProgress >= dur * 0.30) {
                 shortsMidpointReached = true;
             }
 
-            // 步骤 2：在达到中点后判定播完
-            if (shortsMidpointReached) {
-                const remaining = dur - curTime;
-                
-                // 判定 1: 距离结尾 <= 0.85 秒 (宽松窗口，确保绝对不漏检)
-                const reachedEnd = (remaining <= 0.85 && remaining >= -0.5);
-                
-                // 判定 2: 监测到时间大幅倒退 (曾经播放到 45% 以上，当前时间比峰值倒退 2.5 秒以上或回到 2 秒内)
-                // 这 100% 对应 YouTube 播放器播完回滚循环的特征！
-                const loopedBack = (maxPlaybackProgress >= dur * 0.45) && (curTime < maxPlaybackProgress - 2.5 || curTime < 2.0);
+            const remaining = dur - curTime;
+            
+            // 判定 1: 距离结尾 <= 0.85 秒且至少播放了 1.5 秒
+            const reachedEnd = (curTime > 1.5 && remaining <= 0.85 && remaining >= -0.5);
+            
+            // 判定 2: 原生结束事件或播放器结束状态
+            const isConfirmedEnded = isEnded && (curTime > 1.5 || maxPlaybackProgress >= dur * 0.30);
+            
+            // 判定 3: 循环回滚 (峰值曾达到 40% 以上，当前时间倒退 2.0 秒以上或回到 2.0 秒内)
+            const loopedBack = (maxPlaybackProgress >= dur * 0.40) && (curTime < maxPlaybackProgress - 2.0 || curTime < 2.0);
 
-                if (reachedEnd || isEnded || loopedBack) {
-                    shortsAdvanceTriggered = true;
-                    console.log('[AutoPlay] Short finished! (reachedEnd:', reachedEnd, 'isEnded:', isEnded, 'loopedBack:', loopedBack, '). Advancing...');
-                    playNextVerticalVideo();
-                }
+            if (reachedEnd || isConfirmedEnded || loopedBack) {
+                shortsAdvanceTriggered = true;
+                console.log('[AutoPlay] Short finished! (reachedEnd:', reachedEnd, 'isConfirmedEnded:', isConfirmedEnded, 'loopedBack:', loopedBack, '). Advancing...');
+                playNextVerticalVideo();
+
+                // 容错与重试保护：若 2.5 秒后仍在同一 URL 且视频已停止，解除 trigger 锁允许重新切换
+                setTimeout(() => {
+                    if (window.location.pathname === currentPath) {
+                        shortsAdvanceTriggered = false;
+                        isAdvanceLocked = false;
+                    }
+                }, 2500);
             }
         }
     }
