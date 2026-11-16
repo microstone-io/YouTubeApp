@@ -5,6 +5,10 @@ import WebKit
 let injectedScript = """
 (function() {
     'use strict';
+    // 仅在 youtube.com 域名执行，绝对不污染 accounts.google.com 登录页面
+    if (!window.location.hostname.includes('youtube.com')) {
+        return;
+    }
     console.log('[YouTube Native App] Cinema Engine Active');
 
     // 1. INJECT CLEAN CINEMA STYLES & AD BLOCKING RULES
@@ -38,11 +42,15 @@ let injectedScript = """
 
         /* 2. 原生顶部标题栏适配（留出顶部 28px 供窗口拖动） */
         #masthead-container {
-            padding-top: 4px !important;
+            padding-top: 28px !important;
             background-color: rgba(15, 15, 15, 0.95) !important;
             backdrop-filter: blur(20px) !important;
             -webkit-backdrop-filter: blur(20px) !important;
             transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s ease !important;
+        }
+
+        #page-manager {
+            margin-top: 84px !important;
         }
 
         /* 3. 沉浸式极简影院模式 (Cinema Mode) */
@@ -295,8 +303,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.07, alpha: 1.0)
 
-        // WebKit 配置
+        // WebKit 配置 (启用持久化 Cookie 数据存储)
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore.default()
+
         let userContentController = WKUserContentController()
         let userScript = WKUserScript(source: injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         userContentController.addUserScript(userScript)
@@ -304,6 +314,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsAirPlayForMediaPlayback = true
+
+        let webpagePreferences = WKWebpagePreferences()
+        webpagePreferences.allowsContentJavaScript = true
+        configuration.defaultWebpagePreferences = webpagePreferences
 
         if #available(macOS 12.3, *) {
             configuration.preferences.isElementFullscreenEnabled = true
@@ -314,7 +328,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.allowsBackForwardNavigationGestures = true
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+
+        // 采用桌面版 Chrome User-Agent：
+        // 1. 完全防止 macOS Sonoma/Sequoia 将 YouTube/Google 导航拦截并跳转到系统 Safari Web App
+        // 2. 避免 Google 登录出现 "This browser or app may not be secure" 警告
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+        // 设置暗色底色，避免加载页面或跳转时出现白屏眩光
+        if #available(macOS 12.0, *) {
+            webView.underPageBackgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.07, alpha: 1.0)
+        }
+        webView.setValue(false, forKey: "drawsBackground")
 
         // 顶部 2px 极简加载指示条
         progressIndicator = NSProgressIndicator()
@@ -371,6 +395,98 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
     }
 
+    // MARK: - WKNavigationDelegate 导航与弹窗控制
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let targetURL = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+
+        let urlString = targetURL.absoluteString
+        let scheme = (targetURL.scheme ?? "").lowercased()
+
+        if urlString == "about:blank" || urlString.isEmpty {
+            decisionHandler(.allow)
+            return
+        }
+
+        if scheme != "http" && scheme != "https" {
+            NSWorkspace.shared.open(targetURL)
+            decisionHandler(.cancel)
+            return
+        }
+
+        let host = (targetURL.host ?? "").lowercased()
+
+        // YouTube 自身以及 Google 账号登录体系全部严格保留在当前原生客户端窗口运行
+        let isInternalDomain = host.contains("youtube.com") ||
+                               host.contains("youtu.be") ||
+                               host.contains("google.com") ||
+                               host.contains("googleusercontent.com") ||
+                               host.contains("gstatic.com") ||
+                               host.contains("googleapis.com")
+
+        if isInternalDomain {
+            // 如果网页使用 target="_blank" 或 window.open 打开新窗口，直接重定向在当前主窗口加载
+            if navigationAction.targetFrame == nil {
+                webView.load(navigationAction.request)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+            return
+        }
+
+        // 描述栏里的外部链接（如 Twitter、GitHub、博客等）通过系统默认浏览器打开，不干扰客户端播放
+        NSWorkspace.shared.open(targetURL)
+        decisionHandler(.cancel)
+    }
+
+    // 针对 window.open 调用的委托实现
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if navigationAction.targetFrame == nil {
+            if let targetURL = navigationAction.request.url, targetURL.absoluteString != "about:blank" {
+                webView.load(navigationAction.request)
+            }
+        }
+        return nil
+    }
+
+    // 登录成功后如果停留在 Google 账号管理或回调中间页，自动带回 YouTube 首页
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let url = webView.url {
+            let host = url.host ?? ""
+            if host.contains("myaccount.google.com") || (host.contains("accounts.google.com") && (url.path.contains("CheckCookie") || url.path.contains("b/0"))) {
+                if let ytURL = URL(string: "https://www.youtube.com") {
+                    webView.load(URLRequest(url: ytURL))
+                }
+            }
+        }
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        webView.reload()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        if nsError.code == NSURLErrorCancelled || nsError.code == 102 {
+            return
+        }
+        print("[YouTubeApp] Provisional navigation error: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        if nsError.code == NSURLErrorCancelled || nsError.code == 102 {
+            return
+        }
+        print("[YouTubeApp] Navigation error: \(error.localizedDescription)")
+    }
+
+    // MARK: - 原生菜单
+
     func setupMainMenu() {
         let mainMenu = NSMenu()
 
@@ -408,6 +524,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // History Menu
         let historyMenuItem = NSMenuItem()
         let historyMenu = NSMenu(title: "History")
+        let homeItem = NSMenuItem(title: "YouTube Home", action: #selector(goHome), keyEquivalent: "H")
+        homeItem.keyEquivalentModifierMask = [.command, .shift]
+        homeItem.target = self
+        historyMenu.addItem(homeItem)
         let backItem = NSMenuItem(title: "Back", action: #selector(goBack), keyEquivalent: "[")
         backItem.target = self
         historyMenu.addItem(backItem)
@@ -428,6 +548,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         NSApp.mainMenu = mainMenu
     }
 
+    @objc func goHome() {
+        if let url = URL(string: "https://www.youtube.com") {
+            webView.load(URLRequest(url: url))
+        }
+    }
     @objc func reloadPage() { webView.reload() }
     @objc func actualSize() { webView.pageZoom = 1.0 }
     @objc func zoomIn() { webView.pageZoom += 0.1 }
