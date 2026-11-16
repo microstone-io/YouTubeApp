@@ -118,7 +118,7 @@ let injectedScript = """
             overflow: hidden !important;
         }
 
-        /* 视频本身满幅铺满视口，消除四边所有黑边 */
+        /* 视频本身在全屏与窗口下永远保持完美 16:9 比例，不拉伸、不裁切任何画面与字幕 */
         body.cinema-mode-active video.html5-main-video,
         body.cinema-mode-active video {
             position: fixed !important;
@@ -132,10 +132,10 @@ let injectedScript = """
             max-height: 100vh !important;
             min-width: 100vw !important;
             min-height: 100vh !important;
-            margin: 0 !important;
+            margin: auto !important;
             padding: 0 !important;
             border: none !important;
-            object-fit: cover !important;
+            object-fit: contain !important;
             transform: none !important;
         }
 
@@ -467,7 +467,8 @@ let injectedScript = """
             video.style.setProperty('height', '100vh', 'important');
             video.style.setProperty('max-width', '100vw', 'important');
             video.style.setProperty('max-height', '100vh', 'important');
-            video.style.setProperty('object-fit', 'cover', 'important');
+            video.style.setProperty('margin', 'auto', 'important');
+            video.style.setProperty('object-fit', 'contain', 'important');
             video.style.setProperty('transform', 'none', 'important');
         }
 
