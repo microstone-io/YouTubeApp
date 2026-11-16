@@ -194,31 +194,52 @@ let injectedScript = """
         body.cinema-vertical-mode #yt-native-toggle-btn {
             display: none !important;
             visibility: hidden !important;
+            width: 0 !important;
+            height: 0 !important;
             pointer-events: none !important;
         }
 
-        /* 竖屏模式 CSS 变量全局覆盖：彻底根除因 calc((100vh - 96px)*0.5625) 导致的右侧黑边 */
+        /* 竖屏模式 CSS 变量全局覆盖：彻底根除因 calc((100vh - 96px)*0.5625) 与 mini-guide 导致的黑边 */
         :root,
         html,
         body,
         ytd-app,
+        #content,
+        #page-manager,
         ytd-shorts,
         #shorts-container,
         #shorts-inner-container {
+            --ytd-mini-guide-width: 0px !important;
+            --app-drawer-width: 0px !important;
             --ytd-shorts-player-width: 100vw !important;
             --ytd-shorts-player-height: 100vh !important;
         }
 
-        /* 解决竖屏顶部 84px/56px 空白与底部拉长问题：重置 page-manager 边距与所有容器 */
+        /* 解决竖屏顶部空白、左侧 72px 边距与底部拉长问题：重置 page-manager 边距与所有容器 */
         body.cinema-vertical-mode html,
         body.cinema-vertical-mode body,
         body.cinema-vertical-mode ytd-app,
+        body.cinema-vertical-mode ytd-app[mini-guide-visible] #page-manager,
+        body.cinema-vertical-mode ytd-app #page-manager,
         body.cinema-vertical-mode #page-manager,
+        body.cinema-vertical-mode #content,
         body.cinema-vertical-mode ytd-shorts,
         body.cinema-vertical-mode #shorts-container,
         body.cinema-vertical-mode #shorts-inner-container {
             margin: 0 !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
             padding: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            top: 0 !important;
+            bottom: 0 !important;
             width: 100vw !important;
             max-width: 100vw !important;
             overflow-x: hidden !important;
@@ -626,19 +647,14 @@ let injectedScript = """
         }
     }
 
-    // 6. 准确定位当前正在播放的 Shorts 视频与播放器
+    // 6. 查找视口中心当前正在播放的有效视频 (复刻 FikFap 视口几何定位)
     function getActiveVideo() {
-        const shortsVideo = document.querySelector('#shorts-player video') ||
-                            document.querySelector('ytd-reel-video-renderer[is-active] video');
-        if (shortsVideo) return shortsVideo;
+        const activeReelVideo = document.querySelector('ytd-reel-video-renderer[is-active] video');
+        if (activeReelVideo) return activeReelVideo;
 
         const videos = Array.from(document.querySelectorAll('video'));
         if (videos.length === 0) return null;
         if (videos.length === 1) return videos[0];
-
-        for (const v of videos) {
-            if (!v.paused && v.currentTime > 0) return v;
-        }
 
         const centerY = window.innerHeight / 2;
         for (const v of videos) {
@@ -647,15 +663,22 @@ let injectedScript = """
                 return v;
             }
         }
-        return videos.find(v => v.duration > 0 || (v.src && v.src.length > 0)) || videos[videos.length - 1] || videos[0];
+        return videos.find(v => !v.paused && v.currentTime > 0) || videos[0] || null;
     }
 
     // 7. 竖屏专用下一个与上一个视频调度 (三维立体驱动：JS 按键事件 + DOM 按钮点击 + Swift 原生硬件按键)
     let isAdvanceLocked = false;
+    let isAutoAdvancing = false;
+
     function playNextVerticalVideo() {
         if (isAdvanceLocked) return;
         isAdvanceLocked = true;
-        setTimeout(() => { isAdvanceLocked = false; }, 1800);
+        setTimeout(() => { isAdvanceLocked = false; }, 2200);
+
+        isAutoAdvancing = true;
+        document.body.classList.remove('cinema-active');
+        document.body.classList.add('cinema-playing');
+        setTimeout(() => { isAutoAdvancing = false; }, 2000);
 
         console.log('[AutoPlay] Executing advance to next Short...');
         showToast('⏭ 播放完毕，切换下一个');
@@ -666,21 +689,15 @@ let injectedScript = """
             return;
         }
 
-        // 维度 1: 模拟 YouTube 官方 Down 按键事件
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
-        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
-
-        // 维度 2: 遍历点击官方下一条按钮 (最可靠直接)
+        // 维度 1: 遍历点击官方下一条按钮 (最可靠直接)
         const nextSelectors = [
             '#navigation-button-down button',
             'ytd-shorts #navigation-button-down button',
             '#shorts-container #navigation-button-down button',
-            'ytd-reel-video-renderer #navigation-button-down button',
             'ytd-reel-video-renderer[is-active] #navigation-button-down button',
+            'ytd-reel-video-renderer #navigation-button-down button',
             'button[aria-label="下一个视频"]',
-            'button[aria-label="Next video"]',
-            '#shorts-container button[aria-label*="下一"]',
-            '#shorts-container button[aria-label*="Next"]'
+            'button[aria-label="Next video"]'
         ];
         for (const sel of nextSelectors) {
             const btn = document.querySelector(sel);
@@ -689,6 +706,10 @@ let injectedScript = """
                 break;
             }
         }
+
+        // 维度 2: 模拟 YouTube 官方 Down 按键事件
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
 
         // 维度 3: 通过 Swift 桥梁注入 macOS 原生硬件级 Down Arrow
         try {
@@ -701,7 +722,12 @@ let injectedScript = """
     function playPrevVerticalVideo() {
         if (isAdvanceLocked) return;
         isAdvanceLocked = true;
-        setTimeout(() => { isAdvanceLocked = false; }, 1800);
+        setTimeout(() => { isAdvanceLocked = false; }, 2200);
+
+        isAutoAdvancing = true;
+        document.body.classList.remove('cinema-active');
+        document.body.classList.add('cinema-playing');
+        setTimeout(() => { isAutoAdvancing = false; }, 2000);
 
         console.log('[AutoPlay] Returning to previous Short...');
         showToast('⏮ 切换上一个');
@@ -711,15 +737,12 @@ let injectedScript = """
             return;
         }
 
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38, bubbles: true }));
-        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38, bubbles: true }));
-
         const prevSelectors = [
             '#navigation-button-up button',
             'ytd-shorts #navigation-button-up button',
             '#shorts-container #navigation-button-up button',
-            'ytd-reel-video-renderer #navigation-button-up button',
             'ytd-reel-video-renderer[is-active] #navigation-button-up button',
+            'ytd-reel-video-renderer #navigation-button-up button',
             'button[aria-label="上一个视频"]',
             'button[aria-label="Previous video"]'
         ];
@@ -731,6 +754,9 @@ let injectedScript = """
             }
         }
 
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38, bubbles: true }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38, bubbles: true }));
+
         try {
             if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.youtubeBridge) {
                 window.webkit.messageHandlers.youtubeBridge.postMessage({ action: 'prevVideo' });
@@ -738,93 +764,66 @@ let injectedScript = """
         } catch(e) {}
     }
 
-    // 8. 竖屏短视频播完自动切换下一条 (URL+高频时间线+峰值门控+回滚捕获全维保障，100% 可靠)
-    let currentShortsPath = '';
-    let shortsMidpointReached = false;
-    let shortsAdvanceTriggered = false;
+    // 8. 竖屏短视频播完自动切换下一条 (复刻 FikFap 铁壁中点门控机制，彻底杜绝黑屏秒切与不切死循环)
+    let activeVideoId = '';
+    let hasReachedMidpoint = false;
+    let hasTriggeredEnd = false;
     let maxPlaybackProgress = 0;
 
     function checkShortsAutoPlay() {
         const isShorts = window.location.pathname.includes('/shorts') || currentVideoMode === 'vertical';
         if (!isShorts) return;
-        if (isAdvanceLocked) return;
 
-        // 1. 根据当前 URL 路径判定是否切换到新视频 (彻底避免 DOM 节点复用和 blob 变化引起的误重置)
-        const currentPath = window.location.pathname;
-        if (currentPath !== currentShortsPath) {
-            currentShortsPath = currentPath;
-            shortsMidpointReached = false;
-            shortsAdvanceTriggered = false;
+        const video = getActiveVideo();
+        if (!video) return;
+
+        // 唯一视频流标识 (blob url 或 src 结合 pathname)
+        const currentSrc = video.currentSrc || video.src || '';
+        const currentId = currentSrc + '::' + window.location.pathname;
+
+        // 检测到新视频流接入时，彻底重置门控与状态
+        if (currentId && currentId !== activeVideoId) {
+            activeVideoId = currentId;
+            hasReachedMidpoint = false;
+            hasTriggeredEnd = false;
             maxPlaybackProgress = 0;
-            console.log('[AutoPlay] Active Short URL updated:', currentPath);
+            console.log('[AutoPlay] Detected new Short stream:', currentId);
+
+            if (video.paused && !isAdvanceLocked) {
+                video.play().catch(() => {});
+            }
+            return;
         }
 
-        if (shortsAdvanceTriggered) return;
+        // 若当前视频已触发过切换，或处于冷却锁定期，绝不重复触发
+        if (hasTriggeredEnd || isAdvanceLocked) return;
 
-        const player = document.getElementById('shorts-player') || document.getElementById('movie_player');
-        const videos = Array.from(document.querySelectorAll('video'));
-        // 优先选取处于视口中心且有画面或时长的有效视频
-        let video = videos.find(v => !v.paused && v.currentTime > 0) ||
-                    videos.find(v => v.duration > 0 || (v.currentSrc && v.currentSrc.length > 0)) ||
-                    document.querySelector('#shorts-player video') ||
-                    videos[videos.length - 1] || videos[0];
+        // 核心门控要求：视频有真实时长且处于播放状态
+        if (video.duration && video.duration > 2.0 && !video.paused) {
+            const currentTime = video.currentTime;
+            const duration = video.duration;
 
-        // 挂载 ended 与 timeupdate 实时原生事件监听
-        if (video && !video._autoAdvanceHooked) {
-            video._autoAdvanceHooked = true;
-            video.addEventListener('timeupdate', checkShortsAutoPlay, { passive: true });
-            video.addEventListener('ended', () => {
-                if (!shortsAdvanceTriggered) {
-                    shortsAdvanceTriggered = true;
-                    console.log('[AutoPlay] Native video ended event fired. Advancing...');
+            if (currentTime > maxPlaybackProgress) {
+                maxPlaybackProgress = currentTime;
+            }
+
+            // 步骤 1：视频必须实际播放超过 40% 时长（彻底杜绝黑屏秒切）
+            if (currentTime >= duration * 0.40 && maxPlaybackProgress >= duration * 0.40) {
+                hasReachedMidpoint = true;
+            }
+
+            // 步骤 2：仅当通过中点门控后，才允许判定放完或循环回滚
+            if (hasReachedMidpoint) {
+                const remaining = duration - currentTime;
+                // 放完判定：距离结尾 <= 0.35s，或触发 ended，或播放回滚到 1.0s 内（YouTube 自动 loop 回到头部）
+                const isAtEnd = (remaining <= 0.35) || video.ended || (currentTime < 1.0);
+
+                if (isAtEnd) {
+                    hasTriggeredEnd = true;
+                    hasReachedMidpoint = false; // 立即重置门控
+                    console.log('[AutoPlay] Video reached end (remaining:', remaining.toFixed(2), 'cur:', currentTime.toFixed(2), '). Advancing...');
                     playNextVerticalVideo();
                 }
-            }, { passive: true });
-        }
-
-        const vCur = (video && !isNaN(video.currentTime)) ? video.currentTime : 0;
-        const pCur = (player && typeof player.getCurrentTime === 'function') ? player.getCurrentTime() : 0;
-        const curTime = Math.max(vCur, pCur);
-
-        const vDur = (video && !isNaN(video.duration) && video.duration > 0) ? video.duration : 0;
-        const pDur = (player && typeof player.getDuration === 'function') ? player.getDuration() : 0;
-        const dur = (vDur > 0) ? vDur : pDur;
-
-        const isEnded = (video && video.ended) || (player && typeof player.getPlayerState === 'function' && player.getPlayerState() === 0);
-
-        if (dur > 2.0) {
-            if (curTime > maxPlaybackProgress) {
-                maxPlaybackProgress = curTime;
-            }
-
-            // 步骤 1：播放超过 30% 时长确认为正常观看
-            if (maxPlaybackProgress >= dur * 0.30) {
-                shortsMidpointReached = true;
-            }
-
-            const remaining = dur - curTime;
-            
-            // 判定 1: 距离结尾 <= 0.85 秒且至少播放了 1.5 秒
-            const reachedEnd = (curTime > 1.5 && remaining <= 0.85 && remaining >= -0.5);
-            
-            // 判定 2: 原生结束事件或播放器结束状态
-            const isConfirmedEnded = isEnded && (curTime > 1.5 || maxPlaybackProgress >= dur * 0.30);
-            
-            // 判定 3: 循环回滚 (峰值曾达到 40% 以上，当前时间倒退 2.0 秒以上或回到 2.0 秒内)
-            const loopedBack = (maxPlaybackProgress >= dur * 0.40) && (curTime < maxPlaybackProgress - 2.0 || curTime < 2.0);
-
-            if (reachedEnd || isConfirmedEnded || loopedBack) {
-                shortsAdvanceTriggered = true;
-                console.log('[AutoPlay] Short finished! (reachedEnd:', reachedEnd, 'isConfirmedEnded:', isConfirmedEnded, 'loopedBack:', loopedBack, '). Advancing...');
-                playNextVerticalVideo();
-
-                // 容错与重试保护：若 2.5 秒后仍在同一 URL 且视频已停止，解除 trigger 锁允许重新切换
-                setTimeout(() => {
-                    if (window.location.pathname === currentPath) {
-                        shortsAdvanceTriggered = false;
-                        isAdvanceLocked = false;
-                    }
-                }, 2500);
             }
         }
     }
@@ -963,13 +962,49 @@ let injectedScript = """
         document.documentElement.style.setProperty('overflow', 'hidden', 'important');
         document.body.style.setProperty('overflow', 'hidden', 'important');
 
-        // 覆盖 YouTube 内部 Shorts 动态宽度变量，彻底清除右侧黑边
+        // 覆盖 YouTube 内部 Shorts 动态宽度变量，彻底清除右侧与左侧黑边
+        document.documentElement.style.setProperty('--ytd-mini-guide-width', '0px', 'important');
+        document.documentElement.style.setProperty('--app-drawer-width', '0px', 'important');
         document.documentElement.style.setProperty('--ytd-shorts-player-width', '100vw', 'important');
         document.documentElement.style.setProperty('--ytd-shorts-player-height', '100vh', 'important');
+        document.body.style.setProperty('--ytd-mini-guide-width', '0px', 'important');
+        document.body.style.setProperty('--app-drawer-width', '0px', 'important');
         document.body.style.setProperty('--ytd-shorts-player-width', '100vw', 'important');
         document.body.style.setProperty('--ytd-shorts-player-height', '100vh', 'important');
 
-        // 强力对齐页面上所有视频与容器，根除左侧黑边与底部下一个视频露头
+        // 移除 ytd-app 上的 mini-guide-visible 属性，彻底消除桌面端 72px 左侧黑条
+        const ytdApp = document.querySelector('ytd-app');
+        if (ytdApp) {
+            ytdApp.removeAttribute('mini-guide-visible');
+        }
+
+        // 强制重置 #page-manager 与 #content 的 margin-left / margin-top 为 0
+        const pageManager = document.querySelector('#page-manager');
+        if (pageManager) {
+            pageManager.style.setProperty('margin', '0px', 'important');
+            pageManager.style.setProperty('margin-left', '0px', 'important');
+            pageManager.style.setProperty('margin-top', '0px', 'important');
+            pageManager.style.setProperty('padding', '0px', 'important');
+            pageManager.style.setProperty('width', '100vw', 'important');
+            pageManager.style.setProperty('max-width', '100vw', 'important');
+        }
+
+        const content = document.querySelector('#content');
+        if (content) {
+            content.style.setProperty('margin', '0px', 'important');
+            content.style.setProperty('margin-left', '0px', 'important');
+            content.style.setProperty('margin-top', '0px', 'important');
+            content.style.setProperty('padding', '0px', 'important');
+        }
+
+        // 隐藏侧栏与顶栏
+        const miniGuide = document.querySelector('ytd-mini-guide-renderer, #guide, #masthead-container');
+        if (miniGuide) {
+            miniGuide.style.setProperty('display', 'none', 'important');
+            miniGuide.style.setProperty('width', '0px', 'important');
+        }
+
+        // 强力对齐页面上所有视频与容器，根除黑边
         const allVideos = Array.from(document.querySelectorAll('video'));
         allVideos.forEach(v => {
             v.style.setProperty('position', 'absolute', 'important');
@@ -1029,7 +1064,16 @@ let injectedScript = """
             p.style.setProperty('--ytd-shorts-player-height', '100vh', 'important');
         });
 
+        // 对齐当前激活的 reel 卡片到视口顶部，杜绝底部下一个视频画面露头
+        const activeReel = document.querySelector('ytd-reel-video-renderer[is-active]');
         const shortsContainer = document.querySelector('#shorts-container');
+        if (activeReel && shortsContainer) {
+            const targetTop = activeReel.offsetTop;
+            if (Math.abs(shortsContainer.scrollTop - targetTop) > 2) {
+                shortsContainer.scrollTop = targetTop;
+            }
+        }
+
         if (shortsContainer) {
             shortsContainer.style.setProperty('justify-content', 'flex-start', 'important');
             shortsContainer.style.setProperty('align-items', 'flex-start', 'important');
@@ -1171,11 +1215,13 @@ let injectedScript = """
         if (isShorts || (isWatch && mode === 'vertical')) {
             // === 9:16 竖屏模式：复制 FikFap 满幅与交互 ===
             document.body.classList.remove('cinema-mode-active');
-            document.body.classList.add('cinema-vertical-mode');
-            if (!document.body.classList.contains('cinema-playing')) {
-                document.body.classList.add('cinema-active');
+            if (!document.body.classList.contains('cinema-vertical-mode')) {
+                document.body.classList.add('cinema-vertical-mode');
+                fitVerticalVideo();
             }
-            fitVerticalVideo();
+            if (!document.body.classList.contains('cinema-playing') && !document.body.classList.contains('cinema-active')) {
+                document.body.classList.add('cinema-playing');
+            }
             ensureOverlayButtons();
             checkShortsAutoPlay();
             skipVideoAds();
@@ -1183,11 +1229,13 @@ let injectedScript = """
             // === 16:9 横屏模式：保持固化的 v1.5.0 影院逻辑 ===
             document.body.classList.remove('cinema-vertical-mode');
             if (isCinemaModeEnabled) {
-                document.body.classList.add('cinema-mode-active');
-                if (!document.body.classList.contains('cinema-playing')) {
-                    document.body.classList.add('cinema-active');
+                if (!document.body.classList.contains('cinema-mode-active')) {
+                    document.body.classList.add('cinema-mode-active');
+                    fitVideoToWindow();
                 }
-                fitVideoToWindow();
+                if (!document.body.classList.contains('cinema-playing') && !document.body.classList.contains('cinema-active')) {
+                    document.body.classList.add('cinema-playing');
+                }
             }
             ensureOverlayButtons();
             ensureTheaterMode();
@@ -1207,9 +1255,10 @@ let injectedScript = """
         }
     }
 
-    // 15. 沉浸式隐显交互控制 (鼠标静止 2.0s 自动淡出所有控件，复刻 FikFap)
+    // 15. 沉浸式隐显交互控制 (鼠标静止 1.8s 自动淡出所有控件，复刻 FikFap)
     let cinemaTimer = null;
     function handleUserActivity() {
+        if (isAutoAdvancing) return;
         document.body.classList.remove('cinema-playing');
         document.body.classList.add('cinema-active');
         document.body.classList.remove('hide-cursor');
@@ -1225,8 +1274,18 @@ let injectedScript = """
                 document.body.classList.add('cinema-playing');
                 document.body.classList.add('hide-cursor');
             }
-        }, 2000);
+        }, 1800);
     }
+
+    // 初始状态：1.5 秒后自动淡出 UI 进入沉浸播放状态
+    setTimeout(() => {
+        const isWatchPage = window.location.pathname.includes('/watch');
+        const isShorts = window.location.pathname.includes('/shorts') || currentVideoMode === 'vertical';
+        if (isWatchPage || isShorts) {
+            document.body.classList.remove('cinema-active');
+            document.body.classList.add('cinema-playing');
+        }
+    }, 1500);
 
     window.addEventListener('mousemove', handleUserActivity, { passive: true });
     window.addEventListener('mousedown', handleUserActivity, { passive: true });
@@ -1298,7 +1357,11 @@ let injectedScript = """
         lastQualityLockedVideo = '';
         setTimeout(detectVideoOrientation, 150);
         setTimeout(hookVideoEvents, 200);
-        setTimeout(updateWatchState, 300);
+        setTimeout(() => {
+            updateWatchState();
+            if (currentVideoMode === 'vertical') fitVerticalVideo();
+            else fitVideoToWindow();
+        }, 300);
         setTimeout(lockMaxResolution, 600);
         setTimeout(skipVideoAds, 300);
     });
@@ -1320,11 +1383,17 @@ let injectedScript = """
         if (e.key === 'ArrowDown' || e.key === 'PageDown') {
             e.preventDefault();
             e.stopPropagation();
+            activeVideoId = '';
+            hasReachedMidpoint = false;
+            hasTriggeredEnd = false;
             showToast('⏭ 下一个视频');
             playNextVideo();
         } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
             e.preventDefault();
             e.stopPropagation();
+            activeVideoId = '';
+            hasReachedMidpoint = false;
+            hasTriggeredEnd = false;
             showToast('⏮ 上一个视频');
             playPreviousVideo();
         } else if (e.key === 'p' || e.key === 'P') {
@@ -1465,8 +1534,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         if #available(macOS 12.3, *) {
             configuration.preferences.isElementFullscreenEnabled = true
         }
+        configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
         webView = WKWebView(frame: windowRect, configuration: configuration)
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
