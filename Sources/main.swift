@@ -187,12 +187,10 @@ let injectedScript = """
             display: none !important;
         }
 
-        /* 解决竖屏顶部 84px 空白与底部拉长问题：重置 page-manager 边距 */
+        /* 解决竖屏顶部 84px/56px 空白与底部拉长问题：重置 page-manager 边距与所有容器 */
         body.cinema-vertical-mode #page-manager {
-            margin-top: 0 !important;
-            padding-top: 0 !important;
-            margin-bottom: 0 !important;
-            padding-bottom: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
             height: 100vh !important;
             max-height: 100vh !important;
         }
@@ -206,37 +204,23 @@ let injectedScript = """
             pointer-events: none !important;
         }
 
-        body.cinema-vertical-mode ytd-shorts {
+        /* 彻底消除左边黑条 (18.375px) 与底部黑条 (80px)：解除外层卡片所有 margin/padding */
+        body.cinema-vertical-mode ytd-shorts,
+        body.cinema-vertical-mode #shorts-container,
+        body.cinema-vertical-mode #shorts-inner-container,
+        body.cinema-vertical-mode ytd-reel-video-renderer,
+        body.cinema-vertical-mode #player,
+        body.cinema-vertical-mode #player.skeleton.shorts,
+        body.cinema-vertical-mode #player-wrap,
+        body.cinema-vertical-mode #player-api,
+        body.cinema-vertical-mode #player-container,
+        body.cinema-vertical-mode #shorts-player,
+        body.cinema-vertical-mode .html5-video-player,
+        body.cinema-vertical-mode .html5-video-container {
             margin: 0 !important;
             padding: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            max-width: 100vw !important;
-            max-height: 100vh !important;
-        }
-
-        body.cinema-vertical-mode #shorts-container {
-            width: 100vw !important;
-            height: 100vh !important;
-            max-width: 100vw !important;
-            max-height: 100vh !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-
-        body.cinema-vertical-mode ytd-reel-video-renderer {
-            width: 100vw !important;
-            height: 100vh !important;
-            max-width: 100vw !important;
-            max-height: 100vh !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            padding-bottom: 0 !important;
-        }
-
-        body.cinema-vertical-mode ytd-reel-video-renderer #player-container,
-        body.cinema-vertical-mode ytd-reel-video-renderer .html5-video-player,
-        body.cinema-vertical-mode ytd-reel-video-renderer .html5-video-container {
+            left: 0 !important;
+            top: 0 !important;
             width: 100vw !important;
             height: 100vh !important;
             max-width: 100vw !important;
@@ -244,15 +228,17 @@ let injectedScript = """
             min-width: 100vw !important;
             min-height: 100vh !important;
             border-radius: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
             background: #000000 !important;
         }
 
-        /* 竖屏视频 100% 满幅贴合 9:16 视口，无任何黑边，消除底部拉长空缺 */
-        body.cinema-vertical-mode ytd-reel-video-renderer video,
-        body.cinema-vertical-mode video.html5-main-video,
-        body.cinema-vertical-mode video {
+        /* 竖屏视频 100% 满幅贴合 9:16 视口，无任何左边、底部黑边 */
+        body.cinema-vertical-mode video,
+        body.cinema-vertical-mode video.html5-main-video {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
             width: 100vw !important;
             height: 100vh !important;
             max-width: 100vw !important;
@@ -263,39 +249,47 @@ let injectedScript = """
             border-radius: 0 !important;
             margin: 0 !important;
             padding: 0 !important;
-            top: 0 !important;
-            left: 0 !important;
             transform: none !important;
+            z-index: 10 !important;
         }
 
-        /* 竖屏交互控件 (点赞、评论、标题、返回等) 平滑显隐，复刻 FikFap */
+        /* 竖屏交互控件 (点赞、评论、分享、转推、标题、返回等) 平滑显隐 */
+        body.cinema-vertical-mode #actions,
+        body.cinema-vertical-mode [id*="actions"],
+        body.cinema-vertical-mode ytd-reel-player-overlay-renderer,
+        body.cinema-vertical-mode .ytd-reel-player-overlay-renderer,
         body.cinema-vertical-mode ytd-reel-video-renderer #actions,
-        body.cinema-vertical-mode ytd-reel-video-renderer .ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode ytd-reel-video-renderer ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode ytd-reel-video-renderer .ytd-reel-player-overlay-renderer,
-        body.cinema-vertical-mode ytd-reel-video-renderer #overlay,
+        body.cinema-vertical-mode ytd-reel-player-header-renderer,
+        body.cinema-vertical-mode #overlay,
         body.cinema-vertical-mode #yt-native-back-btn {
-            transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            z-index: 9999 !important;
         }
 
+        body.cinema-vertical-mode.cinema-playing #actions,
+        body.cinema-vertical-mode.cinema-playing [id*="actions"],
+        body.cinema-vertical-mode.cinema-playing ytd-reel-player-overlay-renderer,
+        body.cinema-vertical-mode.cinema-playing .ytd-reel-player-overlay-renderer,
         body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer #actions,
-        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer .ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer .ytd-reel-player-overlay-renderer,
-        body.cinema-vertical-mode.cinema-playing ytd-reel-video-renderer #overlay,
+        body.cinema-vertical-mode.cinema-playing ytd-reel-player-header-renderer,
+        body.cinema-vertical-mode.cinema-playing #overlay,
         body.cinema-vertical-mode.cinema-playing #yt-native-back-btn {
             opacity: 0 !important;
             pointer-events: none !important;
+            visibility: hidden !important;
         }
 
+        body.cinema-vertical-mode.cinema-active #actions,
+        body.cinema-vertical-mode.cinema-active [id*="actions"],
+        body.cinema-vertical-mode.cinema-active ytd-reel-player-overlay-renderer,
+        body.cinema-vertical-mode.cinema-active .ytd-reel-player-overlay-renderer,
         body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer #actions,
-        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer .ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer ytd-reel-player-header-renderer,
-        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer .ytd-reel-player-overlay-renderer,
-        body.cinema-vertical-mode.cinema-active ytd-reel-video-renderer #overlay,
+        body.cinema-vertical-mode.cinema-active ytd-reel-player-header-renderer,
+        body.cinema-vertical-mode.cinema-active #overlay,
         body.cinema-vertical-mode.cinema-active #yt-native-back-btn {
             opacity: 1 !important;
             pointer-events: auto !important;
+            visibility: visible !important;
         }
 
         /* 6. 双模式共用：静止 2.5s 后播放器控件自动平滑渐隐 */
@@ -762,22 +756,39 @@ let injectedScript = """
         document.documentElement.style.setProperty('overflow', 'hidden', 'important');
         document.body.style.setProperty('overflow', 'hidden', 'important');
 
-        const activeVideo = getActiveVideo();
-        if (activeVideo) {
-            activeVideo.style.setProperty('width', '100vw', 'important');
-            activeVideo.style.setProperty('height', '100vh', 'important');
-            activeVideo.style.setProperty('max-width', '100vw', 'important');
-            activeVideo.style.setProperty('max-height', '100vh', 'important');
-            activeVideo.style.setProperty('min-width', '100vw', 'important');
-            activeVideo.style.setProperty('min-height', '100vh', 'important');
-            activeVideo.style.setProperty('object-fit', 'cover', 'important');
-            activeVideo.style.setProperty('border-radius', '0px', 'important');
-            activeVideo.style.setProperty('margin', '0px', 'important');
-            activeVideo.style.setProperty('padding', '0px', 'important');
-            activeVideo.style.setProperty('top', '0px', 'important');
-            activeVideo.style.setProperty('left', '0px', 'important');
-            activeVideo.style.setProperty('transform', 'none', 'important');
-        }
+        // 强力对齐页面上所有视频与容器，根除左侧黑边与底部黑边
+        const allVideos = Array.from(document.querySelectorAll('video'));
+        allVideos.forEach(v => {
+            v.style.setProperty('position', 'fixed', 'important');
+            v.style.setProperty('top', '0px', 'important');
+            v.style.setProperty('left', '0px', 'important');
+            v.style.setProperty('right', '0px', 'important');
+            v.style.setProperty('bottom', '0px', 'important');
+            v.style.setProperty('width', '100vw', 'important');
+            v.style.setProperty('height', '100vh', 'important');
+            v.style.setProperty('max-width', '100vw', 'important');
+            v.style.setProperty('max-height', '100vh', 'important');
+            v.style.setProperty('min-width', '100vw', 'important');
+            v.style.setProperty('min-height', '100vh', 'important');
+            v.style.setProperty('object-fit', 'cover', 'important');
+            v.style.setProperty('border-radius', '0px', 'important');
+            v.style.setProperty('margin', '0px', 'important');
+            v.style.setProperty('padding', '0px', 'important');
+            v.style.setProperty('transform', 'none', 'important');
+            v.style.setProperty('z-index', '10', 'important');
+        });
+
+        // 重置所有播放器骨架与容器的 margin / padding (解决 18.375px 左黑边与 56px 顶部偏移)
+        const playerWrappers = document.querySelectorAll('#player, #player-wrap, #player-api, #shorts-player, #player-container, ytd-shorts, #shorts-container, #shorts-inner-container, ytd-reel-video-renderer');
+        playerWrappers.forEach(p => {
+            p.style.setProperty('margin', '0px', 'important');
+            p.style.setProperty('padding', '0px', 'important');
+            p.style.setProperty('left', '0px', 'important');
+            p.style.setProperty('top', '0px', 'important');
+            p.style.setProperty('width', '100vw', 'important');
+            p.style.setProperty('height', '100vh', 'important');
+            p.style.setProperty('border-radius', '0px', 'important');
+        });
     }
 
     // 11. 浮动返回与模式切换按钮创建
@@ -931,7 +942,7 @@ let injectedScript = """
         }
     }
 
-    // 15. 沉浸式隐显交互控制 (鼠标静止 2.2s 自动淡出所有控件，复刻 FikFap)
+    // 15. 沉浸式隐显交互控制 (鼠标静止 2.0s 自动淡出所有控件，复刻 FikFap)
     let cinemaTimer = null;
     function handleUserActivity() {
         document.body.classList.remove('cinema-playing');
@@ -942,26 +953,26 @@ let injectedScript = """
 
         cinemaTimer = setTimeout(() => {
             const isWatchPage = window.location.pathname.includes('/watch');
-            const isShorts = window.location.pathname.includes('/shorts');
-            const activeVideo = getActiveVideo();
-            const isPlaying = activeVideo && !activeVideo.paused && activeVideo.currentTime > 0;
+            const isShorts = window.location.pathname.includes('/shorts') || currentVideoMode === 'vertical';
 
-            if ((isWatchPage || isShorts) && isPlaying) {
+            if (isWatchPage || isShorts) {
                 document.body.classList.remove('cinema-active');
                 document.body.classList.add('cinema-playing');
                 document.body.classList.add('hide-cursor');
             }
-        }, 2200);
+        }, 2000);
     }
 
     window.addEventListener('mousemove', handleUserActivity, { passive: true });
     window.addEventListener('mousedown', handleUserActivity, { passive: true });
     window.addEventListener('click', handleUserActivity, { passive: true });
     window.addEventListener('mouseleave', () => {
-        const activeVideo = getActiveVideo();
-        if (activeVideo && !activeVideo.paused && activeVideo.currentTime > 0) {
+        const isWatchPage = window.location.pathname.includes('/watch');
+        const isShorts = window.location.pathname.includes('/shorts') || currentVideoMode === 'vertical';
+        if (isWatchPage || isShorts) {
             document.body.classList.remove('cinema-active');
             document.body.classList.add('cinema-playing');
+            document.body.classList.add('hide-cursor');
         }
     });
 
