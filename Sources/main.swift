@@ -1,7 +1,7 @@
 import Cocoa
 import WebKit
 
-// Native UserScript: Ad-Free, Auto 4K/1080p Max Quality, Zero-Border Full-Window 16:9 Cinema Mode (like FikFap)
+// Native UserScript: Ad-Free, Auto 4K/1080p, Zero-Border Cinema, Auto-Next Video, Scroll/Arrow Video Switching (FikFap Experience)
 let injectedScript = """
 (function() {
     'use strict';
@@ -11,7 +11,7 @@ let injectedScript = """
     }
     console.log('[YouTube Native App] Zero-Border Cinema Engine Active');
 
-    // 1. 注入强力清除广告与 100% 满幅无黑边影院 CSS
+    // 1. 注入强力清除广告、彻底干掉右侧滚动条灰边、100% 满幅无黑边影院 CSS
     const style = document.createElement('style');
     style.id = 'yt-native-clean-styles';
     style.textContent = `
@@ -40,7 +40,36 @@ let injectedScript = """
             overflow: hidden !important;
         }
 
-        /* 2. 首页顶部标题栏留出 28px 原生拖拽区 */
+        /* 2. 彻底消灭右侧滚动条与灰边 (Zero Scrollbar Track) */
+        ::-webkit-scrollbar {
+            display: none !important;
+            width: 0px !important;
+            height: 0px !important;
+            background: transparent !important;
+        }
+
+        ::-webkit-scrollbar-thumb,
+        ::-webkit-scrollbar-track,
+        ::-webkit-scrollbar-corner {
+            display: none !important;
+            background: transparent !important;
+        }
+
+        html, body, ytd-app, #page-manager, ytd-watch-flexy, #columns, #primary {
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }
+
+        body.cinema-mode-active,
+        body.cinema-mode-active html,
+        body.cinema-mode-active ytd-app,
+        body.cinema-mode-active #page-manager {
+            overflow: hidden !important;
+            overflow-y: hidden !important;
+            overflow-x: hidden !important;
+        }
+
+        /* 3. 首页顶部标题栏留出 28px 原生拖拽区 */
         #masthead-container {
             padding-top: 28px !important;
             background-color: rgba(15, 15, 15, 0.95) !important;
@@ -53,7 +82,7 @@ let injectedScript = """
             margin-top: 84px !important;
         }
 
-        /* 3. 彻底消除上下左右所有黑边：100% 满幅无边框影院填充 */
+        /* 4. 彻底消除上下左右所有黑边：100% 满幅无边框影院填充 */
         body.cinema-mode-active #masthead-container {
             display: none !important;
         }
@@ -153,7 +182,7 @@ let injectedScript = """
             background-color: #000000 !important;
         }
 
-        /* 4. 原生浮动按钮 (返回按钮与视图切换) */
+        /* 5. 原生浮动按钮 (返回按钮与视图切换) */
         #yt-native-back-btn,
         #yt-native-toggle-btn {
             display: none;
@@ -203,10 +232,135 @@ let injectedScript = """
             opacity: 0 !important;
             pointer-events: none !important;
         }
+
+        /* 6. 切视频 HUD 提示 Toast */
+        #yt-native-toast {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.88);
+            background: rgba(12, 12, 16, 0.85);
+            color: #ffffff;
+            padding: 14px 28px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            pointer-events: none;
+            z-index: 1000000;
+            opacity: 0;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        #yt-native-toast.visible {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
     `;
     (document.head || document.documentElement).appendChild(style);
 
-    // 2. 强力视频贴片广告秒跳引擎
+    // 2. 切视频 HUD 浮层提示
+    function showToast(text) {
+        let toast = document.getElementById('yt-native-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'yt-native-toast';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = text;
+        toast.classList.add('visible');
+        clearTimeout(window._toastTimer);
+        window._toastTimer = setTimeout(() => {
+            toast.classList.remove('visible');
+        }, 900);
+    }
+
+    // 3. 强力“下一个视频”与“上一个视频”调度引擎
+    function playNextVideo() {
+        console.log('[CinemaEngine] Advancing to next video...');
+        const player = document.getElementById('movie_player');
+
+        // 1. 尝试播放器的 nextVideo 原生接口
+        if (player && typeof player.nextVideo === 'function') {
+            try {
+                player.nextVideo();
+                return;
+            } catch(e) {}
+        }
+
+        // 2. 尝试点击原生 Next 按钮 (Shift+N)
+        const nextBtn = document.querySelector('.ytp-next-button') || document.querySelector('a.ytp-next-button');
+        if (nextBtn && !nextBtn.hasAttribute('aria-disabled')) {
+            nextBtn.click();
+            return;
+        }
+
+        // 3. 抓取右侧推荐流的第一条视频跳转
+        const nextSelectors = [
+            'ytd-compact-video-renderer a#thumbnail',
+            'ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer a#thumbnail',
+            '#secondary ytd-compact-video-renderer a#thumbnail',
+            'ytd-item-section-renderer ytd-compact-video-renderer a#thumbnail'
+        ];
+
+        for (const sel of nextSelectors) {
+            const link = document.querySelector(sel);
+            if (link && link.href && !link.href.includes(window.location.search)) {
+                link.click();
+                return;
+            }
+        }
+
+        // 4. 发送 Shift+N 快捷键
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', code: 'KeyN', shiftKey: true, bubbles: true }));
+    }
+
+    function playPreviousVideo() {
+        console.log('[CinemaEngine] Returning to previous video...');
+        const player = document.getElementById('movie_player');
+        if (player && typeof player.previousVideo === 'function') {
+            try {
+                player.previousVideo();
+                return;
+            } catch(e) {}
+        }
+
+        const prevBtn = document.querySelector('.ytp-prev-button');
+        if (prevBtn && !prevBtn.hasAttribute('aria-disabled')) {
+            prevBtn.click();
+            return;
+        }
+
+        if (window.history.length > 1) {
+            window.history.back();
+        }
+    }
+
+    // 4. 播完后自动切换下一个视频 (Auto Next on Ended)
+    function setupAutoPlayNext() {
+        // 自动开启 YouTube 原生自动连播开关
+        const autoNavBtn = document.querySelector('.ytp-autonav-toggle-button');
+        if (autoNavBtn && autoNavBtn.getAttribute('aria-checked') === 'false') {
+            autoNavBtn.click();
+        }
+
+        // 绑定 HTML5 video 的自然播放结束事件
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (video && !video._nativeEndedBound) {
+            video._nativeEndedBound = true;
+            video.addEventListener('ended', () => {
+                console.log('[AutoPlay] Video ended naturally, advancing to next video...');
+                showToast('⏭ 播放完毕，正在切换下一个视频');
+                setTimeout(playNextVideo, 800);
+            });
+        }
+    }
+
+    // 5. 强力视频贴片广告秒跳引擎
     function skipVideoAds() {
         const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         if (!player) return;
@@ -245,7 +399,7 @@ let injectedScript = """
         }
     }
 
-    // 3. 自动锁定最高分辨率画质 (4K / 1440p / 1080p 60fps)
+    // 6. 自动锁定最高分辨率画质 (4K / 1440p / 1080p 60fps)
     const qualityRank = {
         'highres': 100,
         'hd2880': 90,
@@ -295,9 +449,13 @@ let injectedScript = """
         }
     }
 
-    // 4. 强制视频元素无黑边铺满视口
+    // 7. 强制视频元素无黑边、无滚动条铺满视口
     function fitVideoToWindow() {
         if (!window.location.pathname.includes('/watch') || !isCinemaModeEnabled) return;
+
+        document.documentElement.style.setProperty('overflow', 'hidden', 'important');
+        document.body.style.setProperty('overflow', 'hidden', 'important');
+
         const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
         if (video) {
             video.style.setProperty('position', 'fixed', 'important');
@@ -324,7 +482,7 @@ let injectedScript = """
         }
     }
 
-    // 5. 浮动返回与模式切换按钮创建
+    // 8. 浮动返回与模式切换按钮创建
     function ensureOverlayButtons() {
         let backBtn = document.getElementById('yt-native-back-btn');
         if (!backBtn) {
@@ -367,6 +525,8 @@ let injectedScript = """
             document.body.classList.remove('cinema-mode-active');
             document.body.classList.remove('cinema-playing');
             document.body.classList.remove('hide-cursor');
+            document.documentElement.style.removeProperty('overflow');
+            document.body.style.removeProperty('overflow');
             if (toggleBtn) toggleBtn.innerHTML = '🎬 影院满幅';
             const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
             if (video) {
@@ -391,7 +551,7 @@ let injectedScript = """
         }
     }
 
-    // 6. 监听路由与播放状态更新
+    // 9. 监听路由与播放状态更新
     function updateWatchState() {
         const isWatch = window.location.pathname.includes('/watch');
         if (isWatch) {
@@ -402,6 +562,7 @@ let injectedScript = """
             }
             ensureOverlayButtons();
             ensureTheaterMode();
+            setupAutoPlayNext();
             lockMaxResolution();
             skipVideoAds();
         } else {
@@ -409,10 +570,12 @@ let injectedScript = """
             document.body.classList.remove('cinema-playing');
             document.body.classList.remove('cinema-active');
             document.body.classList.remove('hide-cursor');
+            document.documentElement.style.removeProperty('overflow');
+            document.body.style.removeProperty('overflow');
         }
     }
 
-    // 7. 沉浸式隐显交互控制 (鼠标静止 2.5s 自动淡出)
+    // 10. 沉浸式隐显交互控制 (鼠标静止 2.5s 自动淡出)
     let cinemaTimer = null;
     function handleUserActivity() {
         document.body.classList.remove('cinema-playing');
@@ -437,14 +600,45 @@ let injectedScript = """
     window.addEventListener('mousemove', handleUserActivity, { passive: true });
     window.addEventListener('mousedown', handleUserActivity, { passive: true });
     window.addEventListener('click', handleUserActivity, { passive: true });
-    window.addEventListener('wheel', handleUserActivity, { passive: true });
-    window.addEventListener('keydown', handleUserActivity, { passive: true });
     window.addEventListener('resize', fitVideoToWindow);
 
-    // 8. 全局周期性轮询与页面切歌监听
+    // 11. 鼠标滚轮/触控板滑动换视频 (类似 FikFap 体验)
+    let wheelDelta = 0;
+    let wheelCooldown = false;
+
+    window.addEventListener('wheel', (e) => {
+        handleUserActivity();
+        if (!window.location.pathname.includes('/watch') || !isCinemaModeEnabled) return;
+        if (wheelCooldown) return;
+
+        wheelDelta += e.deltaY;
+
+        // 鼠标向下滑动 -> 切换下一个视频
+        if (wheelDelta > 75) {
+            wheelCooldown = true;
+            wheelDelta = 0;
+            showToast('⏭ 下一个视频');
+            playNextVideo();
+            setTimeout(() => { wheelCooldown = false; }, 1200);
+        }
+        // 鼠标向上滑动 -> 切换上一个视频
+        else if (wheelDelta < -75) {
+            wheelCooldown = true;
+            wheelDelta = 0;
+            showToast('⏮ 上一个视频');
+            playPreviousVideo();
+            setTimeout(() => { wheelCooldown = false; }, 1200);
+        }
+
+        clearTimeout(window._wheelResetTimer);
+        window._wheelResetTimer = setTimeout(() => { wheelDelta = 0; }, 300);
+    }, { passive: true });
+
+    // 12. 全局周期性轮询与页面切歌监听
     setInterval(() => {
         skipVideoAds();
         lockMaxResolution();
+        setupAutoPlayNext();
         updateWatchState();
         fitVideoToWindow();
     }, 400);
@@ -453,20 +647,37 @@ let injectedScript = """
         lastQualityLockedVideo = '';
         setTimeout(updateWatchState, 300);
         setTimeout(fitVideoToWindow, 500);
+        setTimeout(setupAutoPlayNext, 600);
         setTimeout(lockMaxResolution, 600);
         setTimeout(skipVideoAds, 300);
     });
 
     window.addEventListener('popstate', updateWatchState);
 
-    // 9. 全局快捷键优化
+    // 13. 全局键盘快捷键控制：向下键/向上键秒切视频
     window.addEventListener('keydown', (e) => {
         const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
         if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) {
             return;
         }
 
-        if (e.key === 'Escape') {
+        handleUserActivity();
+
+        // 向下键 或 PageDown -> 下一个视频
+        if (e.key === 'ArrowDown' || e.key === 'PageDown') {
+            e.preventDefault();
+            e.stopPropagation();
+            showToast('⏭ 下一个视频');
+            playNextVideo();
+        }
+        // 向上键 或 PageUp -> 上一个视频
+        else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+            e.preventDefault();
+            e.stopPropagation();
+            showToast('⏮ 上一个视频');
+            playPreviousVideo();
+        }
+        else if (e.key === 'Escape') {
             if (window.location.pathname.includes('/watch')) {
                 if (window.history.length > 1) {
                     window.history.back();
@@ -482,7 +693,7 @@ let injectedScript = """
                 fsBtn.click();
             }
         }
-    });
+    }, true);
 })();
 """
 
