@@ -369,12 +369,16 @@ let injectedScript = """
     function detectVideoOrientation() {
         let mode = 'horizontal';
 
-        if (window.location.pathname.includes('/shorts/')) {
+        // 1. YouTube Shorts 页面或挂载了 Shorts 播放组件，100% 判定为 9:16 竖屏
+        if (window.location.pathname.includes('/shorts') ||
+            Boolean(document.querySelector('ytd-shorts[is-active]')) ||
+            Boolean(document.querySelector('ytd-reel-video-renderer[is-active]'))) {
             mode = 'vertical';
-        } else if (window.location.pathname.includes('/watch')) {
+        }
+        // 2. 普通播放页通过视频宽高元数据动态判定
+        else if (window.location.pathname.includes('/watch')) {
             const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
             if (video && video.videoWidth > 0 && video.videoHeight > 0) {
-                // 如果高度显著大于宽度，判定为 9:16 竖屏
                 if (video.videoHeight > video.videoWidth * 1.05) {
                     mode = 'vertical';
                 } else {
@@ -388,6 +392,11 @@ let injectedScript = """
         if (mode !== currentVideoMode) {
             currentVideoMode = mode;
             console.log('[Orientation] Detected video orientation switch to:', mode);
+            if (mode === 'vertical') {
+                showToast('📱 已自动切换为 9:16 竖屏模式');
+            } else if (mode === 'horizontal' && (window.location.pathname.includes('/watch') || window.location.pathname === '/')) {
+                showToast('🎬 已自动切换为 16:9 影院模式');
+            }
             try {
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.youtubeBridge) {
                     window.webkit.messageHandlers.youtubeBridge.postMessage({ action: 'setAspectRatio', mode: mode });
@@ -398,9 +407,21 @@ let injectedScript = """
         return mode;
     }
 
+    function hookVideoEvents() {
+        const video = document.querySelector('video.html5-main-video') ||
+                      document.querySelector('ytd-reel-video-renderer[is-active] video') ||
+                      document.querySelector('video');
+        if (video && !video._orientationHooked) {
+            video._orientationHooked = true;
+            video.addEventListener('loadedmetadata', detectVideoOrientation);
+            video.addEventListener('canplay', detectVideoOrientation);
+            video.addEventListener('playing', detectVideoOrientation);
+        }
+    }
+
     // 4. 强力“下一个视频”调度 (横屏与竖屏自动分流)
     function playNextVideo() {
-        if (currentVideoMode === 'vertical' || window.location.pathname.includes('/shorts/')) {
+        if (currentVideoMode === 'vertical' || window.location.pathname.includes('/shorts')) {
             playNextVerticalVideo();
             return;
         }
@@ -436,7 +457,7 @@ let injectedScript = """
     }
 
     function playPreviousVideo() {
-        if (currentVideoMode === 'vertical' || window.location.pathname.includes('/shorts/')) {
+        if (currentVideoMode === 'vertical' || window.location.pathname.includes('/shorts')) {
             playPrevVerticalVideo();
             return;
         }
@@ -783,7 +804,7 @@ let injectedScript = """
 
     // 14. 路由状态机与横竖屏自动分流更新
     function updateWatchState() {
-        const isShorts = window.location.pathname.includes('/shorts/');
+        const isShorts = window.location.pathname.includes('/shorts');
         const isWatch = window.location.pathname.includes('/watch');
         const mode = detectVideoOrientation();
 
@@ -833,7 +854,7 @@ let injectedScript = """
 
         cinemaTimer = setTimeout(() => {
             const isWatchPage = window.location.pathname.includes('/watch');
-            const isShorts = window.location.pathname.includes('/shorts/');
+            const isShorts = window.location.pathname.includes('/shorts');
             const video = document.querySelector('video');
             const isPlaying = video && !video.paused && video.currentTime > 0;
 
@@ -859,7 +880,7 @@ let injectedScript = """
 
     window.addEventListener('wheel', (e) => {
         handleUserActivity();
-        const isWatchOrShorts = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts/');
+        const isWatchOrShorts = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts');
         if (!isWatchOrShorts) return;
         if (wheelCooldown) return;
 
@@ -896,14 +917,16 @@ let injectedScript = """
     // 18. 全局周期性轮询与页面切歌监听
     setInterval(() => {
         detectVideoOrientation();
+        hookVideoEvents();
         skipVideoAds();
         lockMaxResolution();
         updateWatchState();
-    }, 400);
+    }, 300);
 
     window.addEventListener('yt-navigate-finish', () => {
         lastQualityLockedVideo = '';
-        setTimeout(detectVideoOrientation, 200);
+        setTimeout(detectVideoOrientation, 150);
+        setTimeout(hookVideoEvents, 200);
         setTimeout(updateWatchState, 300);
         setTimeout(lockMaxResolution, 600);
         setTimeout(skipVideoAds, 300);
@@ -914,7 +937,7 @@ let injectedScript = """
         updateWatchState();
     });
 
-    // 19. 全局键盘快捷键控制：向下键/向上键秒切视频、P开启画中画、倍速微调
+    // 19. 全局键盘快捷键控制：向下键/向上键秒切视频、P开启画中画、O切换横竖屏、倍速微调
     window.addEventListener('keydown', (e) => {
         const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
         if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) {
@@ -936,6 +959,18 @@ let injectedScript = """
         } else if (e.key === 'p' || e.key === 'P') {
             e.preventDefault();
             togglePictureInPicture();
+        } else if (e.key === 'o' || e.key === 'O') {
+            e.preventDefault();
+            const nextMode = (currentVideoMode === 'horizontal') ? 'vertical' : 'horizontal';
+            currentVideoMode = nextMode;
+            if (nextMode === 'vertical') showToast('📱 切换为 9:16 竖屏模式');
+            else showToast('🎬 切换为 16:9 影院模式');
+            try {
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.youtubeBridge) {
+                    window.webkit.messageHandlers.youtubeBridge.postMessage({ action: 'setAspectRatio', mode: nextMode });
+                }
+            } catch(err) {}
+            updateWatchState();
         } else if (e.key === ']' || (e.shiftKey && (e.key === '>' || e.key === '.'))) {
             e.preventDefault();
             adjustPlaybackSpeed(0.25);
@@ -946,7 +981,7 @@ let injectedScript = """
             e.preventDefault();
             resetPlaybackSpeed();
         } else if (e.key === 'Escape') {
-            const isWatchOrShorts = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts/');
+            const isWatchOrShorts = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts');
             if (isWatchOrShorts) {
                 if (window.history.length > 1) {
                     window.history.back();
@@ -1169,31 +1204,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             lastHorizontalFrame = currentFrame
 
             // 切换为 9:16 FikFap 竖屏比例（窗口平滑缩放，与 FikFap 保持一致）
-            let targetHeight = min(840, maxAvailableHeight)
+            let targetHeight = min(820, maxAvailableHeight)
             let targetWidth = round(targetHeight * 9.0 / 16.0)
-            let originX = max(screen.visibleFrame.minX, midX - targetWidth / 2)
-            let originY = max(screen.visibleFrame.minY, midY - targetHeight / 2)
+            let originX = max(screen.visibleFrame.minX + 20, min(screen.visibleFrame.maxX - targetWidth - 20, midX - targetWidth / 2))
+            let originY = max(screen.visibleFrame.minY + 20, min(screen.visibleFrame.maxY - targetHeight - 20, midY - targetHeight / 2))
             let newFrame = NSRect(x: originX, y: originY, width: targetWidth, height: targetHeight)
 
-            window.aspectRatio = NSSize(width: 9, height: 16)
-            window.minSize = NSSize(width: 360, height: 640)
+            window.aspectRatio = NSSize.zero
+            window.minSize = NSSize(width: 320, height: 568)
             window.setFrame(newFrame, display: true, animate: true)
+            window.aspectRatio = NSSize(width: 9, height: 16)
         } else {
             // 切回 16:9 横屏影院模式
             let targetFrame: NSRect
             if let saved = lastHorizontalFrame {
                 targetFrame = saved
             } else {
-                let targetWidth: CGFloat = min(1280, screen.visibleFrame.width - 60)
+                let maxW = screen.visibleFrame.width - 60
+                let targetWidth: CGFloat = min(1280, maxW)
                 let targetHeight: CGFloat = round(targetWidth * 9.0 / 16.0)
-                let originX = max(screen.visibleFrame.minX, midX - targetWidth / 2)
-                let originY = max(screen.visibleFrame.minY, midY - targetHeight / 2)
+                let originX = max(screen.visibleFrame.minX + 20, midX - targetWidth / 2)
+                let originY = max(screen.visibleFrame.minY + 20, midY - targetHeight / 2)
                 targetFrame = NSRect(x: originX, y: originY, width: targetWidth, height: targetHeight)
             }
 
-            window.aspectRatio = NSSize(width: 16, height: 9)
-            window.minSize = NSSize(width: 640, height: 360)
+            window.aspectRatio = NSSize.zero
+            window.minSize = NSSize(width: 480, height: 270)
             window.setFrame(targetFrame, display: true, animate: true)
+            window.aspectRatio = NSSize(width: 16, height: 9)
         }
     }
 
@@ -1375,6 +1413,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         fullScreenItem.keyEquivalentModifierMask = [.command, .control]
         fullScreenItem.target = self
         viewMenu.addItem(fullScreenItem)
+
+        let toggleOrientationItem = NSMenuItem(title: "Toggle 16:9 / 9:16 Mode", action: #selector(toggleOrientation), keyEquivalent: "o")
+        toggleOrientationItem.keyEquivalentModifierMask = [.command]
+        toggleOrientationItem.target = self
+        viewMenu.addItem(toggleOrientationItem)
         viewMenu.addItem(NSMenuItem.separator())
 
         let reloadItem = NSMenuItem(title: "Reload", action: #selector(reloadPage), keyEquivalent: "r")
@@ -1428,6 +1471,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
     @objc func toggleFullScreen() {
         window.toggleFullScreen(nil)
+    }
+
+    @objc func toggleOrientation() {
+        let newMode = (currentMode == "horizontal") ? "vertical" : "horizontal"
+        handleAspectRatioChange(mode: newMode)
+        let toastText = (newMode == "vertical") ? "📱 切换为 9:16 竖屏模式" : "🎬 切换为 16:9 影院模式"
+        let js = """
+        currentVideoMode = '\(newMode)';
+        if (typeof showToast === 'function') showToast('\(toastText)');
+        if (typeof updateWatchState === 'function') updateWatchState();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
     @objc func goHome() {
         if let url = URL(string: "https://www.youtube.com") {
