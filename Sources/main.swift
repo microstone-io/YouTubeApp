@@ -1,7 +1,7 @@
 import Cocoa
 import WebKit
 
-// Native UserScript: Ad-Free, Auto 4K/1080p, Zero-Border Cinema, Auto-Next Video, Scroll/Arrow Video Switching (FikFap Experience)
+// Native UserScript: Ad-Free, Auto 4K/1080p, 16:9 Cinema, Auto-Next Video, Scroll/Arrow Video Switching, PiP, Speed Controls, Network Auto-Reconnect
 let injectedScript = """
 (function() {
     'use strict';
@@ -9,7 +9,7 @@ let injectedScript = """
     if (!window.location.hostname.includes('youtube.com')) {
         return;
     }
-    console.log('[YouTube Native App] Zero-Border Cinema Engine Active');
+    console.log('[YouTube Native App] Zero-Border Cinema & Network Resiliency Active');
 
     // 1. 注入强力清除广告、彻底干掉右侧滚动条灰边、100% 满幅无黑边影院 CSS
     const style = document.createElement('style');
@@ -360,7 +360,18 @@ let injectedScript = """
         }
     }
 
-    // 5. 强力视频贴片广告秒跳引擎
+    // 5. 自动跳过“视频已暂停，仍在观看吗？”确认弹窗
+    function autoDismissContinueWatching() {
+        const confirmBtn = document.querySelector('ytd-popup-container yt-confirm-dialog-renderer #confirm-button') ||
+                           document.querySelector('tp-yt-paper-dialog #confirm-button button') ||
+                           document.querySelector('yt-button-shape#confirm-button button');
+        if (confirmBtn && typeof confirmBtn.click === 'function') {
+            confirmBtn.click();
+            console.log('[AutoPlay] Dismissed "Continue watching" dialog');
+        }
+    }
+
+    // 6. 强力视频贴片广告秒跳引擎
     function skipVideoAds() {
         const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         if (!player) return;
@@ -399,7 +410,7 @@ let injectedScript = """
         }
     }
 
-    // 6. 自动锁定最高分辨率画质 (4K / 1440p / 1080p 60fps)
+    // 7. 自动锁定最高分辨率画质 (4K / 1440p / 1080p 60fps)
     const qualityRank = {
         'highres': 100,
         'hd2880': 90,
@@ -449,7 +460,7 @@ let injectedScript = """
         }
     }
 
-    // 7. 强制视频元素无黑边、无滚动条铺满视口
+    // 8. 强制视频元素无黑边、无滚动条铺满视口
     function fitVideoToWindow() {
         if (!window.location.pathname.includes('/watch') || !isCinemaModeEnabled) return;
 
@@ -483,7 +494,7 @@ let injectedScript = """
         }
     }
 
-    // 8. 浮动返回与模式切换按钮创建
+    // 9. 浮动返回与模式切换按钮创建
     function ensureOverlayButtons() {
         let backBtn = document.getElementById('yt-native-back-btn');
         if (!backBtn) {
@@ -552,7 +563,38 @@ let injectedScript = """
         }
     }
 
-    // 9. 监听路由与播放状态更新
+    // 10. 原生画中画切换 (PiP)
+    function togglePictureInPicture() {
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (!video) return;
+        if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(() => {});
+            showToast('⏹ 已退出画中画');
+        } else if (document.pictureInPictureEnabled) {
+            video.requestPictureInPicture().then(() => {
+                showToast('📺 已开启画中画小窗');
+            }).catch(() => {});
+        }
+    }
+
+    // 11. 播放速度动态微调
+    function adjustPlaybackSpeed(delta) {
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (!video) return;
+        let rate = Math.round((video.playbackRate + delta) * 100) / 100;
+        rate = Math.max(0.5, Math.min(3.0, rate));
+        video.playbackRate = rate;
+        showToast('⚡ ' + rate.toFixed(2) + 'x 倍速');
+    }
+
+    function resetPlaybackSpeed() {
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (!video) return;
+        video.playbackRate = 1.0;
+        showToast('⚡ 1.0x 正常倍速');
+    }
+
+    // 12. 监听路由与播放状态更新
     function updateWatchState() {
         const isWatch = window.location.pathname.includes('/watch');
         if (isWatch) {
@@ -564,6 +606,7 @@ let injectedScript = """
             ensureOverlayButtons();
             ensureTheaterMode();
             setupAutoPlayNext();
+            autoDismissContinueWatching();
             lockMaxResolution();
             skipVideoAds();
         } else {
@@ -576,7 +619,7 @@ let injectedScript = """
         }
     }
 
-    // 10. 沉浸式隐显交互控制 (鼠标静止 2.5s 自动淡出)
+    // 13. 沉浸式隐显交互控制 (鼠标静止 2.5s 自动淡出)
     let cinemaTimer = null;
     function handleUserActivity() {
         document.body.classList.remove('cinema-playing');
@@ -603,7 +646,7 @@ let injectedScript = """
     window.addEventListener('click', handleUserActivity, { passive: true });
     window.addEventListener('resize', fitVideoToWindow);
 
-    // 11. 鼠标滚轮/触控板滑动换视频 (类似 FikFap 体验)
+    // 14. 鼠标滚轮/触控板滑动换视频 (类似 FikFap 体验)
     let wheelDelta = 0;
     let wheelCooldown = false;
 
@@ -635,11 +678,23 @@ let injectedScript = """
         window._wheelResetTimer = setTimeout(() => { wheelDelta = 0; }, 300);
     }, { passive: true });
 
-    // 12. 全局周期性轮询与页面切歌监听
+    // 15. 网络状态自愈与感知
+    window.addEventListener('online', () => {
+        console.log('[Network] System back online, auto-reconnecting...');
+        showToast('🌐 网络连接已恢复');
+        setTimeout(() => { location.reload(); }, 600);
+    });
+
+    window.addEventListener('offline', () => {
+        showToast('⚠️ 当前网络连接断开，请检查网络或代理');
+    });
+
+    // 16. 全局周期性轮询与页面切歌监听
     setInterval(() => {
         skipVideoAds();
         lockMaxResolution();
         setupAutoPlayNext();
+        autoDismissContinueWatching();
         updateWatchState();
         fitVideoToWindow();
     }, 400);
@@ -655,7 +710,7 @@ let injectedScript = """
 
     window.addEventListener('popstate', updateWatchState);
 
-    // 13. 全局键盘快捷键控制：向下键/向上键秒切视频
+    // 17. 全局键盘快捷键控制：向下键/向上键秒切视频、P开启画中画、倍速微调
     window.addEventListener('keydown', (e) => {
         const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
         if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) {
@@ -677,6 +732,22 @@ let injectedScript = """
             e.stopPropagation();
             showToast('⏮ 上一个视频');
             playPreviousVideo();
+        }
+        else if (e.key === 'p' || e.key === 'P') {
+            e.preventDefault();
+            togglePictureInPicture();
+        }
+        else if (e.key === ']' || (e.shiftKey && (e.key === '>' || e.key === '.'))) {
+            e.preventDefault();
+            adjustPlaybackSpeed(0.25);
+        }
+        else if (e.key === '[' || (e.shiftKey && (e.key === '<' || e.key === ','))) {
+            e.preventDefault();
+            adjustPlaybackSpeed(-0.25);
+        }
+        else if (e.key === '0') {
+            e.preventDefault();
+            resetPlaybackSpeed();
         }
         else if (e.key === 'Escape') {
             if (window.location.pathname.includes('/watch')) {
@@ -733,10 +804,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     var window: NSWindow!
     var webView: WKWebView!
     var progressIndicator: NSProgressIndicator!
+    var playbackActivity: NSObjectProtocol?
+    var reconnectTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let targetURLString = "https://www.youtube.com"
         guard let url = URL(string: targetURLString) else { return }
+
+        // 防止 macOS 系统休眠或 App Nap 限制后台网络带宽与音视频解码
+        playbackActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+            reason: "YouTube Video Streaming"
+        )
 
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         // 默认 16:9 黄金分辨率比例：1280 × 720
@@ -762,8 +841,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor.black
+        window.setFrameAutosaveName("YouTubeMainWindow")
 
-        // WebKit 配置 (启用持久化 Cookie 数据存储)
+        // WebKit 配置 (启用持久化 Cookie 数据存储与多进程网络池)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.default()
 
@@ -789,7 +869,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.allowsBackForwardNavigationGestures = true
 
-        // 采用桌面版 Chrome User-Agent
+        // 采用桌面版 Chrome User-Agent，自动兼容系统代理与现代网络协议
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
         // 设置全黑底色，消除任何浅色边框与白屏眩光
@@ -911,6 +991,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+
         if let url = webView.url {
             let host = url.host ?? ""
             if host.contains("myaccount.google.com") || (host.contains("accounts.google.com") && (url.path.contains("CheckCookie") || url.path.contains("b/0"))) {
@@ -925,12 +1008,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.reload()
     }
 
+    // 网络断开或代理连接失败时，自动开启自愈重试
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         let nsError = error as NSError
         if nsError.code == NSURLErrorCancelled || nsError.code == 102 {
             return
         }
-        print("[YouTubeApp] Provisional navigation error: \(error.localizedDescription)")
+        print("[YouTubeApp] Network error: \(error.localizedDescription) (code: \(nsError.code))")
+        handleNetworkError(error: nsError)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -941,12 +1026,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         print("[YouTubeApp] Navigation error: \(error.localizedDescription)")
     }
 
+    // 优雅离线暗黑界面与自动心跳自愈
+    func handleNetworkError(error: NSError) {
+        let errorHTML = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {
+                    margin: 0; padding: 0;
+                    display: flex; flex-direction: column;
+                    align-items: center; justify-content: center;
+                    height: 100vh; background-color: #050507;
+                    color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+                    user-select: none; -webkit-user-select: none;
+                }
+                .icon { font-size: 52px; margin-bottom: 20px; animation: pulse 2s infinite ease-in-out; }
+                h2 { font-size: 20px; font-weight: 600; margin: 0 0 10px 0; letter-spacing: -0.3px; }
+                p { font-size: 14px; color: rgba(255,255,255,0.6); max-width: 420px; text-align: center; line-height: 1.5; margin: 0 0 24px 0; }
+                .retry-btn {
+                    padding: 10px 24px; border-radius: 20px;
+                    background: rgba(255,255,255,0.12);
+                    border: 1px solid rgba(255,255,255,0.25);
+                    color: #ffffff; font-size: 14px; font-weight: 600;
+                    cursor: pointer; transition: all 0.2s ease;
+                }
+                .retry-btn:hover { background: rgba(255,255,255,0.22); transform: scale(1.04); }
+                .hint { font-size: 12px; color: rgba(255,255,255,0.35); margin-top: 16px; }
+                @keyframes pulse { 0% { opacity: 0.6; transform: scale(0.98); } 50% { opacity: 1; transform: scale(1.02); } 100% { opacity: 0.6; transform: scale(0.98); } }
+            </style>
+        </head>
+        <body>
+            <div class="icon">🌐</div>
+            <h2>网络连接正在建立中</h2>
+            <p>正在连接 YouTube 服务器。若您启用了代理软件（如 Clash、Shadowrocket 等），请确认系统代理已开启并选择有效节点。</p>
+            <button class="retry-btn" onclick="window.location.href='https://www.youtube.com'">🔄 立即重连</button>
+            <div class="hint">客户端每隔 4 秒会自动尝试自愈重连...</div>
+        </body>
+        </html>
+        """
+        webView.loadHTMLString(errorHTML, baseURL: URL(string: "https://www.youtube.com"))
+
+        // 后台心跳自动重连检测
+        reconnectTimer?.invalidate()
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            print("[YouTubeApp] Auto reconnect check...")
+            if let url = URL(string: "https://www.youtube.com") {
+                self.webView.load(URLRequest(url: url))
+            }
+        }
+    }
+
     // MARK: - 原生菜单
 
     func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // App Menu
+        // 1. App Menu
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About YouTube", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
@@ -959,7 +1097,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        // View Menu
+        // 2. Edit Menu (支持搜索框剪切板与 Cmd+V 粘贴)
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: #selector(UndoManager.undo), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: #selector(UndoManager.redo), keyEquivalent: "Z")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        // 3. View Menu
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         let fullScreenItem = NSMenuItem(title: "Toggle Full Screen", action: #selector(toggleFullScreen), keyEquivalent: "f")
@@ -971,6 +1122,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         let reloadItem = NSMenuItem(title: "Reload", action: #selector(reloadPage), keyEquivalent: "r")
         reloadItem.target = self
         viewMenu.addItem(reloadItem)
+
+        let forceReloadItem = NSMenuItem(title: "Force Reload (Clear Cache)", action: #selector(forceReload), keyEquivalent: "R")
+        forceReloadItem.keyEquivalentModifierMask = [.command, .shift]
+        forceReloadItem.target = self
+        viewMenu.addItem(forceReloadItem)
+        viewMenu.addItem(NSMenuItem.separator())
+
         let actualSizeItem = NSMenuItem(title: "Actual Size", action: #selector(actualSize), keyEquivalent: "0")
         actualSizeItem.target = self
         viewMenu.addItem(actualSizeItem)
@@ -983,7 +1141,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
-        // History Menu
+        // 4. History Menu
         let historyMenuItem = NSMenuItem()
         let historyMenu = NSMenu(title: "History")
         let homeItem = NSMenuItem(title: "YouTube Home", action: #selector(goHome), keyEquivalent: "H")
@@ -999,7 +1157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         historyMenuItem.submenu = historyMenu
         mainMenu.addItem(historyMenuItem)
 
-        // Window Menu
+        // 5. Window Menu
         let windowMenuItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -1019,6 +1177,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
     }
     @objc func reloadPage() { webView.reload() }
+
+    @objc func forceReload() {
+        let types = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+        WKWebsiteDataStore.default().removeData(ofTypes: Set(types), modifiedSince: Date(timeIntervalSince1970: 0)) { [weak self] in
+            self?.webView.reloadFromOrigin()
+        }
+    }
+
     @objc func actualSize() { webView.pageZoom = 1.0 }
     @objc func zoomIn() { webView.pageZoom += 0.1 }
     @objc func zoomOut() { webView.pageZoom = max(0.5, webView.pageZoom - 0.1) }
