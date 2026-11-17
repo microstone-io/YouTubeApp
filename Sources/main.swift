@@ -1016,10 +1016,9 @@ let injectedScript = """
         const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         if (!player) return;
 
+        // 严格以 YouTube 播放器核心原生类名为准，绝不通过模糊 DOM 查找误判常驻文本导致正片被当成广告
         const isAdShowing = player.classList.contains('ad-showing') ||
-                            player.classList.contains('ad-interrupting') ||
-                            Boolean(player.querySelector('.ytp-ad-player-overlay')) ||
-                            Boolean(document.querySelector('.ytp-ad-text, .ytp-ad-preview-container, .ytp-ad-skip-button-container'));
+                            player.classList.contains('ad-interrupting');
 
         const video = player.querySelector('video') || document.querySelector('video.html5-main-video') || document.querySelector('video');
 
@@ -1043,7 +1042,7 @@ let injectedScript = """
                 }
             }
 
-            // 2. 对于中插广告，静音并拉满 16 倍速快速掠过
+            // 2. 对于中插短广告，静音并拉满 16 倍速快速掠过
             // 严禁设置 video.currentTime = video.duration（会导致破坏 MediaSource 缓冲区致黑屏死锁或直接跳到正片结尾）
             if (video) {
                 if (!isAdFastForwarding) {
@@ -1071,23 +1070,24 @@ let injectedScript = """
         }
     }
 
-    // 播放健康看门狗：防止横屏影院模式下由于广告结束后的临时卡顿造成黑屏假死
-    let lastPlayTime = -1;
+    // 播放健康看门狗：防止横屏影院模式下由于广告切换或缓冲抖动造成黑屏假死
     let stallCounter = 0;
     function checkPlaybackHealth() {
-        if (currentVideoMode !== 'horizontal') return;
         const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
         if (!video) return;
 
-        const player = document.getElementById('movie_player');
+        const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         if (player && typeof player.getPlayerState === 'function') {
             const state = player.getPlayerState();
-            // 1: playing, 3: buffering
+            // -1: unstarted, 0: ended, 1: playing, 2: paused, 3: buffering, 5: video cued
             if (state === 3) {
                 stallCounter++;
-                if (stallCounter >= 25) { // 缓冲停滞超过 3 秒，尝试唤醒
+                if (stallCounter >= 20) { // 缓冲停滞超过 2.4 秒，尝试唤醒
                     stallCounter = 0;
-                    if (video.paused && typeof video.play === 'function') {
+                    console.log('[HealthWatchdog] Buffer stall detected, nudging playback...');
+                    if (typeof player.playVideo === 'function') {
+                        player.playVideo();
+                    } else if (video.paused && typeof video.play === 'function') {
                         video.play().catch(() => {});
                     }
                 }
@@ -1113,13 +1113,23 @@ let injectedScript = """
 
     let lastQualityLockedVideo = '';
     function lockMaxResolution() {
-        const player = document.getElementById('movie_player');
+        const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         if (!player || typeof player.getAvailableQualityLevels !== 'function') return;
 
-        const currentVideoId = player.getVideoData ? (player.getVideoData().video_id || '') : '';
-        if (currentVideoId && currentVideoId === lastQualityLockedVideo) {
+        let currentVideoId = '';
+        if (player.getVideoData && typeof player.getVideoData === 'function') {
+            currentVideoId = player.getVideoData().video_id || '';
+        }
+        if (!currentVideoId) {
+            const match = window.location.search.match(/[?&]v=([^&]+)/);
+            currentVideoId = match ? match[1] : window.location.pathname;
+        }
+
+        // 每个视频只锁定一次画质，严禁在播放过程中频繁切换导致 MediaSource 缓冲区重置并黑屏
+        if (!currentVideoId || currentVideoId === lastQualityLockedVideo) {
             return;
         }
+        lastQualityLockedVideo = currentVideoId;
 
         const levels = player.getAvailableQualityLevels();
         if (levels && levels.length > 0) {
@@ -1141,8 +1151,7 @@ let injectedScript = """
                 if (typeof player.setPlaybackQuality === 'function') {
                     player.setPlaybackQuality(bestQuality);
                 }
-                lastQualityLockedVideo = currentVideoId;
-                console.log('[MaxQuality] Locked YouTube video to highest available quality:', bestQuality);
+                console.log('[MaxQuality] Locked YouTube video to highest available quality:', bestQuality, 'for video:', currentVideoId);
             } catch(e) {}
         }
     }
@@ -1464,7 +1473,6 @@ let injectedScript = """
             ensureTheaterMode();
             setupAutoPlayNext();
             autoDismissContinueWatching();
-            lockMaxResolution();
             skipVideoAds();
         } else {
             // 首页 / 列表页
@@ -1572,7 +1580,6 @@ let injectedScript = """
         hookVideoEvents();
         checkShortsAutoPlay();
         skipVideoAds();
-        lockMaxResolution();
         updateWatchState();
         checkPlaybackHealth();
     }, 120);
@@ -1758,7 +1765,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         let userContentController = WKUserContentController()
         userContentController.add(self, name: "youtubeBridge")
-        let userScript = WKUserScript(source: injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        let userScript = WKUserScript(source: injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         userContentController.addUserScript(userScript)
         configuration.userContentController = userContentController
 
