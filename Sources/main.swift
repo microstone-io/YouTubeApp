@@ -13,6 +13,11 @@ let injectedScript = """
         return;
     }
 
+    // 抹除自动化测试特征，杜绝触发 Google BotGuard 防作弊黑屏
+    try {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true });
+    } catch(e) {}
+
     // 日志桥梁：将 JS 控制台日志实时同步至 Swift 及本地调试日志文件
     const origLog = console.log;
     const origWarn = console.warn;
@@ -145,8 +150,7 @@ let injectedScript = """
         body.cinema-mode-active #ytd-player,
         body.cinema-mode-active #container.ytd-player,
         body.cinema-mode-active #movie_player,
-        body.cinema-mode-active .html5-video-player,
-        body.cinema-mode-active .html5-video-container {
+        body.cinema-mode-active .html5-video-player {
             position: fixed !important;
             top: 0 !important;
             left: 0 !important;
@@ -166,7 +170,17 @@ let injectedScript = """
             overflow: hidden !important;
         }
 
-        /* 横屏保持严格 16:9 比例居中 */
+        body.cinema-mode-active .html5-video-container {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            background: transparent !important;
+            z-index: 1001 !important;
+        }
+
+        /* 横屏保持严格 16:9 比例居中并强制置顶于背景上，防止黑屏遮盖 */
         body.cinema-mode-active video.html5-main-video,
         body.cinema-mode-active video {
             position: fixed !important;
@@ -183,8 +197,18 @@ let injectedScript = """
             margin: auto !important;
             padding: 0 !important;
             border: none !important;
+            z-index: 1005 !important;
             object-fit: contain !important;
             transform: none !important;
+        }
+
+        /* 确保各种提示弹窗/验证弹窗处于最顶层，杜绝被黑屏背景遮盖 */
+        #error-screen,
+        ytd-player-error-message-renderer,
+        ytd-modal-with-title-and-button-renderer,
+        ytd-popup-container,
+        tp-yt-paper-dialog {
+            z-index: 2500 !important;
         }
 
         body.cinema-mode-active .ytp-chrome-bottom {
@@ -1175,6 +1199,7 @@ let injectedScript = """
             video.style.setProperty('max-height', '100vh', 'important');
             video.style.setProperty('margin', 'auto', 'important');
             video.style.setProperty('object-fit', 'contain', 'important'); // 横屏严格 16:9 居中
+            video.style.setProperty('z-index', '1005', 'important');
             video.style.setProperty('transform', 'none', 'important');
         }
 
@@ -1789,7 +1814,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.allowsBackForwardNavigationGestures = true
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15"
 
         if #available(macOS 12.0, *) {
             webView.underPageBackgroundColor = NSColor.black
