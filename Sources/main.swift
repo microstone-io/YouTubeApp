@@ -1730,11 +1730,17 @@ let injectedScript = """
 })();
 """
 
-// 页面启动最早执行的脚本：覆盖 isTrusted，确保所有程序化点击（跳过广告按钮）绕过 YouTube 的 bot 检测
+// 页面启动最早执行的脚本（atDocumentStart）：
+// - 覆盖 isTrusted 绕过 BotGuard
+// - 拦截 ytInitialPlayerResponse 剔除广告配置（覆盖初次页面加载）
+// - 拦截 fetch/XHR 从 API 响应中剔除广告数据（覆盖 SPA 切换）
+// - 预埋广告 CSS 无闪烁隐藏广告元素
 let earlyInjectedScript = """
 (function() {
     'use strict';
-    // 1. 覆盖 Event.prototype.isTrusted，使跳过广告的程序化点击不被 YouTube 识别为机器人行为
+    if (!window.location.hostname.includes('youtube.com')) return;
+
+    // ── 1. isTrusted 覆盖 ──────────────────────────────────────
     try {
         Object.defineProperty(Event.prototype, 'isTrusted', {
             get: function() { return true; },
@@ -1742,8 +1748,79 @@ let earlyInjectedScript = """
         });
     } catch(e) {}
 
-    // 2. 预埋广告 CSS（atDocumentStart 确保广告元素一出现即被隐藏，无闪烁）
-    if (!window.location.hostname.includes('youtube.com')) return;
+    // ── 2. 核心：剔除广告配置的函数 ──────────────────────────────
+    function stripAdData(obj) {
+        if (!obj || typeof obj !== 'object') return obj;
+        try {
+            if (obj.adPlacements)       obj.adPlacements = [];
+            if (obj.playerAds)          obj.playerAds = [];
+            if (obj.adSlots)            obj.adSlots = [];
+            if (obj.adBreakHeartbeatParams) delete obj.adBreakHeartbeatParams;
+            // 处理嵌套 response 字段（部分 API 包在 playerResponse 内）
+            if (obj.playerResponse) stripAdData(obj.playerResponse);
+        } catch(e) {}
+        return obj;
+    }
+
+    // ── 3. 拦截 ytInitialPlayerResponse（首屏初始化） ─────────────
+    let _ytInitialPlayerResponse;
+    try {
+        Object.defineProperty(window, 'ytInitialPlayerResponse', {
+            get: function() { return _ytInitialPlayerResponse; },
+            set: function(val) { _ytInitialPlayerResponse = stripAdData(val); },
+            configurable: true
+        });
+    } catch(e) {}
+
+    // ── 4. 拦截 fetch → 过滤 /youtubei/v1/player & /next API ────
+    const _origFetch = window.fetch;
+    window.fetch = async function(resource, options) {
+        const response = await _origFetch.call(this, resource, options);
+        try {
+            const url = (typeof resource === 'string') ? resource
+                      : (resource && resource.url) ? resource.url : '';
+            if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/next')) {
+                const clone = response.clone();
+                const json  = await clone.json();
+                if (json) {
+                    stripAdData(json);
+                    return new Response(JSON.stringify(json), {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    });
+                }
+            }
+        } catch(e) {}
+        return response;
+    };
+
+    // ── 5. 拦截 XMLHttpRequest → 同步过滤 player/next API ────────
+    const _origXHROpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        this._ytAdBlockUrl = url || '';
+        return _origXHROpen.apply(this, arguments);
+    };
+    const _origXHRSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(body) {
+        const url = this._ytAdBlockUrl || '';
+        if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/next')) {
+            this.addEventListener('load', function() {
+                try {
+                    const json = JSON.parse(this.responseText);
+                    if (json) {
+                        stripAdData(json);
+                        const patched = JSON.stringify(json);
+                        Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
+                        Object.defineProperty(this, 'response',     { get: () => patched, configurable: true });
+                    }
+                } catch(e) {}
+            }, { once: true });
+        }
+        return _origXHRSend.apply(this, arguments);
+    };
+
+    // ── 6. 预埋广告 CSS（atDocumentStart，无闪烁） ─────────────────
     const s = document.createElement('style');
     s.id = 'yt-early-ad-block';
     s.textContent = `
@@ -1938,7 +2015,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
     // MARK: - WKContentRuleList 网络层广告屏蔽
     func setupAdBlockContentRules() {
-        let identifier = "YouTubeAdBlock_v3"
+        let identifier = "YouTubeAdBlock_v4"
         WKContentRuleListStore.default().lookUpContentRuleList(forIdentifier: identifier) { [weak self] cachedList, _ in
             if let cachedList = cachedList {
                 DispatchQueue.main.async { self?.webView.configuration.userContentController.add(cachedList) }
@@ -1946,8 +2023,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             }
             let rules = """
             [
-                {"trigger":{"url-filter":"googlevideo\\\\.com/videoplayback","resource-type":["media"],"url-filter-is-case-sensitive":false,
-                 "load-type":["third-party"]},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"doubleclick\\\\.net"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"googleadservices\\\\.com"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"googlesyndication\\\\.com"},"action":{"type":"block"}},
@@ -1957,7 +2032,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/pagead/"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/ptracking"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"s\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
-                {"trigger":{"url-filter":"i\\\\.ytimg\\\\.com/an_webp/"},"action":{"type":"block"}}
+                {"trigger":{"url-filter":"i\\\\.ytimg\\\\.com/an_webp/"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"yt3\\\\.ggpht\\\\.com/ytts/"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/youtubei/v1/log_event"},"action":{"type":"block"}}
             ]
             """
             WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: rules) { [weak self] ruleList, error in
