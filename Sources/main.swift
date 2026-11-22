@@ -79,7 +79,25 @@ let injectedScript = """
         #panels ytd-ads-engagement-panel-content-renderer,
         ytd-action-companion-ad-renderer,
         tp-yt-paper-dialog:has(#feedback),
-        .ytp-suggested-action-badge {
+        .ytp-suggested-action-badge,
+        ytd-ad-slot-renderer,
+        .ytp-ad-player-overlay,
+        .ytp-ad-player-overlay-layout,
+        .ytp-ad-preview-slot,
+        .ytp-ad-preview-container,
+        .ytp-ad-image-overlay,
+        .ytp-ad-persistent-progress-bar-container,
+        .ytp-ad-timed-pie-countdown-container,
+        .ytp-ad-visit-advertiser-button,
+        .ytp-ad-info-dialog-container,
+        ytd-promoted-sparkles-web-renderer,
+        ytd-promoted-sparkles-text-search-renderer,
+        ytd-search-pyv-renderer,
+        ytd-companion-slot-renderer,
+        .ytd-companion-slot-renderer,
+        #player-ads.ytd-watch-flexy,
+        ytd-ad-preview-composite-renderer,
+        yt-about-this-ad-renderer {
             display: none !important;
             visibility: hidden !important;
             opacity: 0 !important;
@@ -1055,13 +1073,28 @@ let injectedScript = """
                 'button.ytp-ad-skip-button-icon',
                 '.ytp-ad-overlay-close-button',
                 'button[class*="skip"]',
-                '.ytp-ad-skip-button-text'
+                '.ytp-ad-skip-button-text',
+                'button[aria-label="Skip ad"]',
+                'button[aria-label="Skip Ads"]',
+                'button[aria-label="Skip Ad"]',
+                'button[aria-label^="Skip ad in"]',
+                'button[aria-label^="Skip in"]',
+                '.ytp-skip-intro-button',
+                '.videoAdUiSkipButton',
+                '[id*="skip-button"]',
+                'button.ytp-ad-skip-button-slot'
             ];
 
             for (const sel of skipSelectors) {
                 const btn = document.querySelector(sel);
                 if (btn && typeof btn.click === 'function') {
-                    btn.click();
+                    // 使用 MouseEvent 分发绕过 isTrusted 检测
+                    try {
+                        const evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                        btn.dispatchEvent(evt);
+                    } catch(e) {
+                        btn.click();
+                    }
                     break;
                 }
             }
@@ -1697,6 +1730,36 @@ let injectedScript = """
 })();
 """
 
+// 页面启动最早执行的脚本：覆盖 isTrusted，确保所有程序化点击（跳过广告按钮）绕过 YouTube 的 bot 检测
+let earlyInjectedScript = """
+(function() {
+    'use strict';
+    // 1. 覆盖 Event.prototype.isTrusted，使跳过广告的程序化点击不被 YouTube 识别为机器人行为
+    try {
+        Object.defineProperty(Event.prototype, 'isTrusted', {
+            get: function() { return true; },
+            configurable: true
+        });
+    } catch(e) {}
+
+    // 2. 预埋广告 CSS（atDocumentStart 确保广告元素一出现即被隐藏，无闪烁）
+    if (!window.location.hostname.includes('youtube.com')) return;
+    const s = document.createElement('style');
+    s.id = 'yt-early-ad-block';
+    s.textContent = `
+        .ytp-ad-player-overlay, .ytp-ad-player-overlay-layout,
+        .ytp-ad-preview-slot, .ytp-ad-preview-container,
+        ytd-ad-slot-renderer, #player-ads,
+        .ytp-ad-image-overlay, .ytp-ad-persistent-progress-bar-container,
+        ytd-promoted-video-renderer, ytd-display-ad-renderer,
+        ytd-banner-promo-renderer, .ytp-ad-overlay-container,
+        ytd-in-feed-ad-layout-renderer, ytd-ad-preview-composite-renderer,
+        ytd-promoted-sparkles-web-renderer { display:none!important; }
+    `;
+    (document.head || document.documentElement).appendChild(s);
+})();
+"""
+
 // 顶部 28px 原生拖拽标题栏：避让左侧交通灯与浮动按钮，中间宽广区域支持拖动与双击全屏
 class DraggableTitleBar: NSView {
     override var mouseDownCanMoveWindow: Bool {
@@ -1790,6 +1853,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         let userContentController = WKUserContentController()
         userContentController.add(self, name: "youtubeBridge")
+        // 最早执行：isTrusted 覆盖 + 预埋广告 CSS（atDocumentStart，所有 frame）
+        let earlyScript = WKUserScript(source: earlyInjectedScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        userContentController.addUserScript(earlyScript)
+        // 主脚本：影院引擎 + 广告跳过逻辑（atDocumentEnd，仅主 frame）
         let userScript = WKUserScript(source: injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         userContentController.addUserScript(userScript)
         configuration.userContentController = userContentController
@@ -1814,7 +1881,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.allowsBackForwardNavigationGestures = true
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15"
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
 
         if #available(macOS 12.0, *) {
             webView.underPageBackgroundColor = NSColor.black
@@ -1864,6 +1931,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         webView.load(request)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // 网络层广告屏蔽：编译并加载 WKContentRuleList，优先从缓存读取
+        setupAdBlockContentRules()
+    }
+
+    // MARK: - WKContentRuleList 网络层广告屏蔽
+    func setupAdBlockContentRules() {
+        let identifier = "YouTubeAdBlock_v3"
+        WKContentRuleListStore.default().lookUpContentRuleList(forIdentifier: identifier) { [weak self] cachedList, _ in
+            if let cachedList = cachedList {
+                DispatchQueue.main.async { self?.webView.configuration.userContentController.add(cachedList) }
+                return
+            }
+            let rules = """
+            [
+                {"trigger":{"url-filter":"googlevideo\\\\.com/videoplayback","resource-type":["media"],"url-filter-is-case-sensitive":false,
+                 "load-type":["third-party"]},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"doubleclick\\\\.net"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"googleadservices\\\\.com"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"googlesyndication\\\\.com"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"adservice\\\\.google\\\\.com"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"ad\\\\.youtube\\\\.com"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/pagead/"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/ptracking"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"s\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"i\\\\.ytimg\\\\.com/an_webp/"},"action":{"type":"block"}}
+            ]
+            """
+            WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: rules) { [weak self] ruleList, error in
+                guard let ruleList = ruleList else { return }
+                DispatchQueue.main.async {
+                    self?.webView.configuration.userContentController.add(ruleList)
+                    self?.webView.reload()
+                }
+            }
+        }
     }
 
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
