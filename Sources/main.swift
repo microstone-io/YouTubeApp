@@ -97,7 +97,18 @@ let injectedScript = """
         .ytd-companion-slot-renderer,
         #player-ads.ytd-watch-flexy,
         ytd-ad-preview-composite-renderer,
-        yt-about-this-ad-renderer {
+        yt-about-this-ad-renderer,
+        ytd-rich-item-renderer:has(ytd-ad-slot-renderer),
+        ytd-rich-section-renderer:has(ytd-statement-banner-renderer),
+        ytd-rich-section-renderer:has(ytd-ad-slot-renderer),
+        ytd-rich-section-renderer:has(ytd-brand-video-singleton-renderer),
+        ytd-masthead-ad-v3-renderer,
+        ytd-primetime-promo-renderer,
+        ytd-brand-video-singleton-renderer,
+        ytd-brand-video-shelf-renderer,
+        yt-mealbar-promo-renderer,
+        ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],
+        ytd-reel-video-renderer:has(ytd-ad-slot-renderer) {
             display: none !important;
             visibility: hidden !important;
             opacity: 0 !important;
@@ -1055,7 +1066,22 @@ let injectedScript = """
     let savedPlaybackRate = 1.0;
 
     function skipVideoAds() {
-        const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        // 0. Shorts 广告检测：若当前激活的 Shorts 卡片包含广告槽位，立即切到下一条
+        if (window.location.pathname.includes('/shorts')) {
+            const activeReel = document.querySelector('ytd-reel-video-renderer[is-active]');
+            const shortsPlayer = document.getElementById('shorts-player');
+            const isShortsAd = (activeReel && activeReel.querySelector('ytd-ad-slot-renderer, ad-slot-renderer, .ytd-ad-slot-renderer')) ||
+                               (shortsPlayer && (shortsPlayer.classList.contains('ad-showing') || shortsPlayer.classList.contains('ad-interrupting')));
+            if (isShortsAd) {
+                console.log('[AdBlock] Shorts ad detected, skipping to next Short...');
+                playNextVerticalVideo();
+                return;
+            }
+        }
+
+        const player = document.querySelector('.html5-video-player.ad-showing, .html5-video-player.ad-interrupting') ||
+                       document.getElementById('movie_player') ||
+                       document.querySelector('.html5-video-player');
         if (!player) return;
 
         // 严格以 YouTube 播放器核心原生类名为准，绝不通过模糊 DOM 查找误判常驻文本导致正片被当成广告
@@ -1732,8 +1758,8 @@ let injectedScript = """
 
 // 页面启动最早执行的脚本（atDocumentStart）：
 // - 覆盖 isTrusted 绕过 BotGuard
-// - 拦截 ytInitialPlayerResponse 剔除广告配置（覆盖初次页面加载）
-// - 拦截 fetch/XHR 从 API 响应中剔除广告数据（覆盖 SPA 切换）
+// - 拦截 ytInitialPlayerResponse / ytInitialData / JSON.parse 剔除广告配置（覆盖首屏加载）
+// - 拦截 fetch/XHR 从 API 响应中剔除广告数据（覆盖首页/搜索/播放/Shorts SPA 切换）
 // - 预埋广告 CSS 无闪烁隐藏广告元素
 let earlyInjectedScript = """
 (function() {
@@ -1749,41 +1775,92 @@ let earlyInjectedScript = """
     } catch(e) {}
 
     // ── 2. 核心：剔除广告配置的函数 ──────────────────────────────
-    function stripAdData(obj) {
+    function stripAdData(obj, depth) {
         if (!obj || typeof obj !== 'object') return obj;
+        if ((depth || 0) > 4) return obj;
+        const nextDepth = (depth || 0) + 1;
         try {
-            if (obj.adPlacements)       obj.adPlacements = [];
-            if (obj.playerAds)          obj.playerAds = [];
-            if (obj.adSlots)            obj.adSlots = [];
+            if (Array.isArray(obj.adPlacements) && obj.adPlacements.length) obj.adPlacements = [];
+            if (Array.isArray(obj.playerAds) && obj.playerAds.length)       obj.playerAds = [];
+            if (Array.isArray(obj.adSlots) && obj.adSlots.length)           obj.adSlots = [];
             if (obj.adBreakHeartbeatParams) delete obj.adBreakHeartbeatParams;
-            // 处理嵌套 response 字段（部分 API 包在 playerResponse 内）
-            if (obj.playerResponse) stripAdData(obj.playerResponse);
+            if (obj.playerResponse) stripAdData(obj.playerResponse, nextDepth);
+            // 清理首页/信息流中的 Masthead 顶部横幅广告与插播广告槽
+            if (obj.header && obj.header.mastheadAdRenderer) delete obj.header.mastheadAdRenderer;
+            if (obj.contents && obj.contents.twoColumnBrowseResultsRenderer) {
+                const tabs = obj.contents.twoColumnBrowseResultsRenderer.tabs;
+                if (Array.isArray(tabs)) {
+                    for (const tab of tabs) {
+                        const richGrid = tab && tab.tabRenderer && tab.tabRenderer.content && tab.tabRenderer.content.richGridRenderer;
+                        if (richGrid) {
+                            if (richGrid.masthead) delete richGrid.masthead;
+                            if (Array.isArray(richGrid.contents)) {
+                                richGrid.contents = richGrid.contents.filter(item => {
+                                    if (!item) return true;
+                                    const rir = item.richItemRenderer && item.richItemRenderer.content;
+                                    if (rir && (rir.adSlotRenderer || rir.promotedSparklesWebRenderer || rir.inFeedAdLayoutRenderer)) return false;
+                                    const rsr = item.richSectionRenderer && item.richSectionRenderer.content;
+                                    if (rsr && (rsr.statementBannerRenderer || rsr.brandVideoSingletonRenderer || rsr.adSlotRenderer)) return false;
+                                    return true;
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         } catch(e) {}
         return obj;
     }
 
-    // ── 3. 拦截 ytInitialPlayerResponse（首屏初始化） ─────────────
+    // ── 3. 拦截 ytInitialPlayerResponse & ytInitialData（首屏初始化） ─
     let _ytInitialPlayerResponse;
     try {
         Object.defineProperty(window, 'ytInitialPlayerResponse', {
             get: function() { return _ytInitialPlayerResponse; },
-            set: function(val) { _ytInitialPlayerResponse = stripAdData(val); },
+            set: function(val) { _ytInitialPlayerResponse = stripAdData(val, 0); },
             configurable: true
         });
     } catch(e) {}
 
-    // ── 4. 拦截 fetch → 过滤 /youtubei/v1/player & /next API ────
+    let _ytInitialData;
+    try {
+        Object.defineProperty(window, 'ytInitialData', {
+            get: function() { return _ytInitialData; },
+            set: function(val) { _ytInitialData = stripAdData(val, 0); },
+            configurable: true
+        });
+    } catch(e) {}
+
+    // ── 3.5 拦截 JSON.parse：兜底所有内联脚本与播放器 JSON 解析 ────
+    const _origJSONParse = JSON.parse;
+    JSON.parse = function(text, reviver) {
+        const res = _origJSONParse.call(this, text, reviver);
+        if (res && typeof res === 'object') {
+            if ('adPlacements' in res || 'playerAds' in res || 'adSlots' in res ||
+                'adBreakHeartbeatParams' in res || 'playerResponse' in res ||
+                ('contents' in res && res.contents && 'twoColumnBrowseResultsRenderer' in res.contents)) {
+                stripAdData(res, 0);
+            }
+        }
+        return res;
+    };
+
+    // ── 4. 拦截 fetch → 过滤 player/next/browse/search/reel API ──
     const _origFetch = window.fetch;
     window.fetch = async function(resource, options) {
         const response = await _origFetch.call(this, resource, options);
         try {
             const url = (typeof resource === 'string') ? resource
                       : (resource && resource.url) ? resource.url : '';
-            if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/next')) {
+            if (url.includes('/youtubei/v1/player') ||
+                url.includes('/youtubei/v1/next') ||
+                url.includes('/youtubei/v1/browse') ||
+                url.includes('/youtubei/v1/search') ||
+                url.includes('/youtubei/v1/reel/')) {
                 const clone = response.clone();
                 const json  = await clone.json();
                 if (json) {
-                    stripAdData(json);
+                    stripAdData(json, 0);
                     return new Response(JSON.stringify(json), {
                         status: response.status,
                         statusText: response.statusText,
@@ -1795,7 +1872,7 @@ let earlyInjectedScript = """
         return response;
     };
 
-    // ── 5. 拦截 XMLHttpRequest → 同步过滤 player/next API ────────
+    // ── 5. 拦截 XMLHttpRequest → 同步过滤 API ────────────────────
     const _origXHROpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
         this._ytAdBlockUrl = url || '';
@@ -1804,12 +1881,16 @@ let earlyInjectedScript = """
     const _origXHRSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function(body) {
         const url = this._ytAdBlockUrl || '';
-        if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/next')) {
+        if (url.includes('/youtubei/v1/player') ||
+            url.includes('/youtubei/v1/next') ||
+            url.includes('/youtubei/v1/browse') ||
+            url.includes('/youtubei/v1/search') ||
+            url.includes('/youtubei/v1/reel/')) {
             this.addEventListener('load', function() {
                 try {
-                    const json = JSON.parse(this.responseText);
+                    const json = _origJSONParse.call(JSON, this.responseText);
                     if (json) {
-                        stripAdData(json);
+                        stripAdData(json, 0);
                         const patched = JSON.stringify(json);
                         Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
                         Object.defineProperty(this, 'response',     { get: () => patched, configurable: true });
@@ -1820,20 +1901,37 @@ let earlyInjectedScript = """
         return _origXHRSend.apply(this, arguments);
     };
 
-    // ── 6. 预埋广告 CSS（atDocumentStart，无闪烁） ─────────────────
-    const s = document.createElement('style');
-    s.id = 'yt-early-ad-block';
-    s.textContent = `
-        .ytp-ad-player-overlay, .ytp-ad-player-overlay-layout,
-        .ytp-ad-preview-slot, .ytp-ad-preview-container,
-        ytd-ad-slot-renderer, #player-ads,
-        .ytp-ad-image-overlay, .ytp-ad-persistent-progress-bar-container,
-        ytd-promoted-video-renderer, ytd-display-ad-renderer,
-        ytd-banner-promo-renderer, .ytp-ad-overlay-container,
-        ytd-in-feed-ad-layout-renderer, ytd-ad-preview-composite-renderer,
-        ytd-promoted-sparkles-web-renderer { display:none!important; }
-    `;
-    (document.head || document.documentElement).appendChild(s);
+    // ── 6. 预埋广告 CSS（atDocumentStart，安全挂载无闪烁） ───────────
+    function injectEarlyCSS() {
+        const target = document.head || document.documentElement;
+        if (!target) {
+            document.addEventListener('DOMContentLoaded', injectEarlyCSS, { once: true });
+            return;
+        }
+        if (document.getElementById('yt-early-ad-block')) return;
+        const s = document.createElement('style');
+        s.id = 'yt-early-ad-block';
+        s.textContent = `
+            .ytp-ad-player-overlay, .ytp-ad-player-overlay-layout,
+            .ytp-ad-preview-slot, .ytp-ad-preview-container,
+            ytd-ad-slot-renderer, #player-ads, #masthead-ad,
+            .ytp-ad-image-overlay, .ytp-ad-persistent-progress-bar-container,
+            ytd-promoted-video-renderer, ytd-display-ad-renderer,
+            ytd-banner-promo-renderer, .ytp-ad-overlay-container,
+            ytd-in-feed-ad-layout-renderer, ytd-ad-preview-composite-renderer,
+            ytd-promoted-sparkles-web-renderer,
+            ytd-masthead-ad-v3-renderer, ytd-primetime-promo-renderer,
+            ytd-brand-video-singleton-renderer, ytd-brand-video-shelf-renderer,
+            yt-mealbar-promo-renderer,
+            ytd-rich-item-renderer:has(ytd-ad-slot-renderer),
+            ytd-rich-section-renderer:has(ytd-statement-banner-renderer),
+            ytd-rich-section-renderer:has(ytd-ad-slot-renderer),
+            ytd-rich-section-renderer:has(ytd-brand-video-singleton-renderer),
+            ytd-reel-video-renderer:has(ytd-ad-slot-renderer) { display:none!important; }
+        `;
+        target.appendChild(s);
+    }
+    injectEarlyCSS();
 })();
 """
 
@@ -2004,21 +2102,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         webView.addObserver(self, forKeyPath: #keyPath(WKWebView.estimatedProgress), options: .new, context: nil)
 
-        let request = URLRequest(url: url)
-        webView.load(request)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        // 网络层广告屏蔽：编译并加载 WKContentRuleList，优先从缓存读取
-        setupAdBlockContentRules()
+        // 先加载网络层广告屏蔽规则，再发起首次页面请求，确保刚打开的第一屏即受保护
+        let request = URLRequest(url: url)
+        setupAdBlockContentRules { [weak self] in
+            self?.webView.load(request)
+        }
     }
 
     // MARK: - WKContentRuleList 网络层广告屏蔽
-    func setupAdBlockContentRules() {
-        let identifier = "YouTubeAdBlock_v4"
+    func setupAdBlockContentRules(completion: @escaping () -> Void) {
+        let identifier = "YouTubeAdBlock_v5"
         WKContentRuleListStore.default().lookUpContentRuleList(forIdentifier: identifier) { [weak self] cachedList, _ in
             if let cachedList = cachedList {
-                DispatchQueue.main.async { self?.webView.configuration.userContentController.add(cachedList) }
+                DispatchQueue.main.async {
+                    self?.webView.configuration.userContentController.add(cachedList)
+                    completion()
+                }
                 return
             }
             let rules = """
@@ -2031,6 +2133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/pagead/"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/ptracking"},"action":{"type":"block"}},
+                {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/get_midroll_info"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"s\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"i\\\\.ytimg\\\\.com/an_webp/"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"yt3\\\\.ggpht\\\\.com/ytts/"},"action":{"type":"block"}},
@@ -2038,10 +2141,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             ]
             """
             WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: rules) { [weak self] ruleList, error in
-                guard let ruleList = ruleList else { return }
                 DispatchQueue.main.async {
-                    self?.webView.configuration.userContentController.add(ruleList)
-                    self?.webView.reload()
+                    if let ruleList = ruleList {
+                        self?.webView.configuration.userContentController.add(ruleList)
+                    }
+                    completion()
                 }
             }
         }
