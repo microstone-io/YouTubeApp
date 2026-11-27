@@ -98,17 +98,12 @@ let injectedScript = """
         #player-ads.ytd-watch-flexy,
         ytd-ad-preview-composite-renderer,
         yt-about-this-ad-renderer,
-        ytd-rich-item-renderer:has(ytd-ad-slot-renderer),
-        ytd-rich-section-renderer:has(ytd-statement-banner-renderer),
-        ytd-rich-section-renderer:has(ytd-ad-slot-renderer),
-        ytd-rich-section-renderer:has(ytd-brand-video-singleton-renderer),
         ytd-masthead-ad-v3-renderer,
         ytd-primetime-promo-renderer,
         ytd-brand-video-singleton-renderer,
         ytd-brand-video-shelf-renderer,
         yt-mealbar-promo-renderer,
-        ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],
-        ytd-reel-video-renderer:has(ytd-ad-slot-renderer) {
+        ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"] {
             display: none !important;
             visibility: hidden !important;
             opacity: 0 !important;
@@ -1756,135 +1751,6 @@ let injectedScript = """
 })();
 """
 
-// 页面启动最早执行的脚本（atDocumentStart）：
-// - 拦截 ytInitialPlayerResponse 剔除视频广告配置（覆盖首屏播放）
-// - 安全拦截 fetch/XHR（仅针对 player / reel 接口），剔除 adPlacements 等广告配置，保留 url 与正确 headers
-// - 预埋广告 CSS 无闪烁隐藏首页横幅、信息流广告卡片与播放器广告层
-let earlyInjectedScript = """
-(function() {
-    'use strict';
-    if (!window.location.hostname.includes('youtube.com')) return;
-
-    // ── 1. 核心：剔除播放器广告配置 ──────────────────────────────
-    function stripAdData(obj, depth) {
-        if (!obj || typeof obj !== 'object') return obj;
-        if ((depth || 0) > 3) return obj;
-        const nextDepth = (depth || 0) + 1;
-        try {
-            if (Array.isArray(obj.adPlacements) && obj.adPlacements.length) obj.adPlacements = [];
-            if (Array.isArray(obj.playerAds) && obj.playerAds.length)       obj.playerAds = [];
-            if (Array.isArray(obj.adSlots) && obj.adSlots.length)           obj.adSlots = [];
-            if (obj.adBreakHeartbeatParams) delete obj.adBreakHeartbeatParams;
-            if (obj.playerResponse) stripAdData(obj.playerResponse, nextDepth);
-        } catch(e) {}
-        return obj;
-    }
-
-    // ── 2. 拦截 ytInitialPlayerResponse（首屏播放器初始化） ────────
-    let _ytInitialPlayerResponse;
-    try {
-        Object.defineProperty(window, 'ytInitialPlayerResponse', {
-            get: function() { return _ytInitialPlayerResponse; },
-            set: function(val) { _ytInitialPlayerResponse = stripAdData(val, 0); },
-            configurable: true
-        });
-    } catch(e) {}
-
-    // ── 3. 安全拦截 fetch → 仅过滤 /player 与 /reel/ API ─────────
-    const _origFetch = window.fetch;
-    window.fetch = async function(resource, options) {
-        const response = await _origFetch.call(this, resource, options);
-        try {
-            const url = (typeof resource === 'string') ? resource
-                      : (resource && resource.url) ? resource.url : '';
-            if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/reel/')) {
-                const clone = response.clone();
-                const json  = await clone.json();
-                if (json && (json.adPlacements || json.playerAds || json.adSlots || json.playerResponse)) {
-                    stripAdData(json, 0);
-                    const headers = new Headers(response.headers);
-                    headers.delete('content-encoding');
-                    headers.delete('content-length');
-                    const patchedResp = new Response(JSON.stringify(json), {
-                        status: response.status,
-                        statusText: response.statusText,
-                        headers: headers
-                    });
-                    try {
-                        Object.defineProperty(patchedResp, 'url', { value: response.url });
-                    } catch(e) {}
-                    return patchedResp;
-                }
-            }
-        } catch(e) {}
-        return response;
-    };
-
-    // ── 4. 安全拦截 XMLHttpRequest → 仅过滤 /player 与 /reel/ API ─
-    const _origXHROpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-        this._ytAdBlockUrl = url || '';
-        return _origXHROpen.apply(this, arguments);
-    };
-    const _origXHRSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function(body) {
-        const url = this._ytAdBlockUrl || '';
-        if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/reel/')) {
-            this.addEventListener('load', function() {
-                try {
-                    const rType = this.responseType;
-                    if (rType && rType !== 'text' && rType !== 'json') return;
-                    const json = (rType === 'json') ? this.response : JSON.parse(this.responseText);
-                    if (json && (json.adPlacements || json.playerAds || json.adSlots || json.playerResponse)) {
-                        stripAdData(json, 0);
-                        if (rType === 'json') {
-                            Object.defineProperty(this, 'response', { get: () => json, configurable: true });
-                        } else {
-                            const patched = JSON.stringify(json);
-                            Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
-                            Object.defineProperty(this, 'response',     { get: () => patched, configurable: true });
-                        }
-                    }
-                } catch(e) {}
-            }, { once: true });
-        }
-        return _origXHRSend.apply(this, arguments);
-    };
-
-    // ── 5. 预埋广告 CSS（atDocumentStart，安全挂载无闪烁） ───────────
-    function injectEarlyCSS() {
-        const target = document.head || document.documentElement;
-        if (!target) {
-            document.addEventListener('DOMContentLoaded', injectEarlyCSS, { once: true });
-            return;
-        }
-        if (document.getElementById('yt-early-ad-block')) return;
-        const s = document.createElement('style');
-        s.id = 'yt-early-ad-block';
-        s.textContent = `
-            .ytp-ad-player-overlay, .ytp-ad-player-overlay-layout,
-            .ytp-ad-preview-slot, .ytp-ad-preview-container,
-            ytd-ad-slot-renderer, #player-ads, #masthead-ad,
-            .ytp-ad-image-overlay, .ytp-ad-persistent-progress-bar-container,
-            ytd-promoted-video-renderer, ytd-display-ad-renderer,
-            ytd-banner-promo-renderer, .ytp-ad-overlay-container,
-            ytd-in-feed-ad-layout-renderer, ytd-ad-preview-composite-renderer,
-            ytd-promoted-sparkles-web-renderer,
-            ytd-masthead-ad-v3-renderer, ytd-primetime-promo-renderer,
-            ytd-brand-video-singleton-renderer, ytd-brand-video-shelf-renderer,
-            yt-mealbar-promo-renderer,
-            ytd-rich-item-renderer:has(ytd-ad-slot-renderer),
-            ytd-rich-section-renderer:has(ytd-statement-banner-renderer),
-            ytd-rich-section-renderer:has(ytd-ad-slot-renderer),
-            ytd-rich-section-renderer:has(ytd-brand-video-singleton-renderer),
-            ytd-reel-video-renderer:has(ytd-ad-slot-renderer) { display:none!important; }
-        `;
-        target.appendChild(s);
-    }
-    injectEarlyCSS();
-})();
-"""
-
 // 顶部 28px 原生拖拽标题栏：避让左侧交通灯与浮动按钮，中间宽广区域支持拖动与双击全屏
 class DraggableTitleBar: NSView {
     override var mouseDownCanMoveWindow: Bool {
@@ -1978,9 +1844,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         let userContentController = WKUserContentController()
         userContentController.add(self, name: "youtubeBridge")
-        // 最早执行：isTrusted 覆盖 + 预埋广告 CSS（atDocumentStart，所有 frame）
-        let earlyScript = WKUserScript(source: earlyInjectedScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        userContentController.addUserScript(earlyScript)
         // 主脚本：影院引擎 + 广告跳过逻辑（atDocumentEnd，仅主 frame）
         let userScript = WKUserScript(source: injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         userContentController.addUserScript(userScript)
@@ -2064,7 +1927,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
     // MARK: - WKContentRuleList 网络层广告屏蔽
     func setupAdBlockContentRules(completion: @escaping () -> Void) {
-        let identifier = "YouTubeAdBlock_v6"
+        let identifier = "YouTubeAdBlock_v7"
         WKContentRuleListStore.default().lookUpContentRuleList(forIdentifier: identifier) { [weak self] cachedList, _ in
             if let cachedList = cachedList {
                 DispatchQueue.main.async {
@@ -2085,7 +1948,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/ptracking"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/get_midroll_info"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"s\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
-                {"trigger":{"url-filter":"i\\\\.ytimg\\\\.com/an_webp/"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"yt3\\\\.ggpht\\\\.com/ytts/"},"action":{"type":"block"}}
             ]
             """
