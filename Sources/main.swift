@@ -1757,27 +1757,18 @@ let injectedScript = """
 """
 
 // 页面启动最早执行的脚本（atDocumentStart）：
-// - 覆盖 isTrusted 绕过 BotGuard
-// - 拦截 ytInitialPlayerResponse / ytInitialData / JSON.parse 剔除广告配置（覆盖首屏加载）
-// - 拦截 fetch/XHR 从 API 响应中剔除广告数据（覆盖首页/搜索/播放/Shorts SPA 切换）
-// - 预埋广告 CSS 无闪烁隐藏广告元素
+// - 拦截 ytInitialPlayerResponse 剔除视频广告配置（覆盖首屏播放）
+// - 安全拦截 fetch/XHR（仅针对 player / reel 接口），剔除 adPlacements 等广告配置，保留 url 与正确 headers
+// - 预埋广告 CSS 无闪烁隐藏首页横幅、信息流广告卡片与播放器广告层
 let earlyInjectedScript = """
 (function() {
     'use strict';
     if (!window.location.hostname.includes('youtube.com')) return;
 
-    // ── 1. isTrusted 覆盖 ──────────────────────────────────────
-    try {
-        Object.defineProperty(Event.prototype, 'isTrusted', {
-            get: function() { return true; },
-            configurable: true
-        });
-    } catch(e) {}
-
-    // ── 2. 核心：剔除广告配置的函数 ──────────────────────────────
+    // ── 1. 核心：剔除播放器广告配置 ──────────────────────────────
     function stripAdData(obj, depth) {
         if (!obj || typeof obj !== 'object') return obj;
-        if ((depth || 0) > 4) return obj;
+        if ((depth || 0) > 3) return obj;
         const nextDepth = (depth || 0) + 1;
         try {
             if (Array.isArray(obj.adPlacements) && obj.adPlacements.length) obj.adPlacements = [];
@@ -1785,34 +1776,11 @@ let earlyInjectedScript = """
             if (Array.isArray(obj.adSlots) && obj.adSlots.length)           obj.adSlots = [];
             if (obj.adBreakHeartbeatParams) delete obj.adBreakHeartbeatParams;
             if (obj.playerResponse) stripAdData(obj.playerResponse, nextDepth);
-            // 清理首页/信息流中的 Masthead 顶部横幅广告与插播广告槽
-            if (obj.header && obj.header.mastheadAdRenderer) delete obj.header.mastheadAdRenderer;
-            if (obj.contents && obj.contents.twoColumnBrowseResultsRenderer) {
-                const tabs = obj.contents.twoColumnBrowseResultsRenderer.tabs;
-                if (Array.isArray(tabs)) {
-                    for (const tab of tabs) {
-                        const richGrid = tab && tab.tabRenderer && tab.tabRenderer.content && tab.tabRenderer.content.richGridRenderer;
-                        if (richGrid) {
-                            if (richGrid.masthead) delete richGrid.masthead;
-                            if (Array.isArray(richGrid.contents)) {
-                                richGrid.contents = richGrid.contents.filter(item => {
-                                    if (!item) return true;
-                                    const rir = item.richItemRenderer && item.richItemRenderer.content;
-                                    if (rir && (rir.adSlotRenderer || rir.promotedSparklesWebRenderer || rir.inFeedAdLayoutRenderer)) return false;
-                                    const rsr = item.richSectionRenderer && item.richSectionRenderer.content;
-                                    if (rsr && (rsr.statementBannerRenderer || rsr.brandVideoSingletonRenderer || rsr.adSlotRenderer)) return false;
-                                    return true;
-                                });
-                            }
-                        }
-                    }
-                }
-            }
         } catch(e) {}
         return obj;
     }
 
-    // ── 3. 拦截 ytInitialPlayerResponse & ytInitialData（首屏初始化） ─
+    // ── 2. 拦截 ytInitialPlayerResponse（首屏播放器初始化） ────────
     let _ytInitialPlayerResponse;
     try {
         Object.defineProperty(window, 'ytInitialPlayerResponse', {
@@ -1822,57 +1790,37 @@ let earlyInjectedScript = """
         });
     } catch(e) {}
 
-    let _ytInitialData;
-    try {
-        Object.defineProperty(window, 'ytInitialData', {
-            get: function() { return _ytInitialData; },
-            set: function(val) { _ytInitialData = stripAdData(val, 0); },
-            configurable: true
-        });
-    } catch(e) {}
-
-    // ── 3.5 拦截 JSON.parse：兜底所有内联脚本与播放器 JSON 解析 ────
-    const _origJSONParse = JSON.parse;
-    JSON.parse = function(text, reviver) {
-        const res = _origJSONParse.call(this, text, reviver);
-        if (res && typeof res === 'object') {
-            if ('adPlacements' in res || 'playerAds' in res || 'adSlots' in res ||
-                'adBreakHeartbeatParams' in res || 'playerResponse' in res ||
-                ('contents' in res && res.contents && 'twoColumnBrowseResultsRenderer' in res.contents)) {
-                stripAdData(res, 0);
-            }
-        }
-        return res;
-    };
-
-    // ── 4. 拦截 fetch → 过滤 player/next/browse/search/reel API ──
+    // ── 3. 安全拦截 fetch → 仅过滤 /player 与 /reel/ API ─────────
     const _origFetch = window.fetch;
     window.fetch = async function(resource, options) {
         const response = await _origFetch.call(this, resource, options);
         try {
             const url = (typeof resource === 'string') ? resource
                       : (resource && resource.url) ? resource.url : '';
-            if (url.includes('/youtubei/v1/player') ||
-                url.includes('/youtubei/v1/next') ||
-                url.includes('/youtubei/v1/browse') ||
-                url.includes('/youtubei/v1/search') ||
-                url.includes('/youtubei/v1/reel/')) {
+            if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/reel/')) {
                 const clone = response.clone();
                 const json  = await clone.json();
-                if (json) {
+                if (json && (json.adPlacements || json.playerAds || json.adSlots || json.playerResponse)) {
                     stripAdData(json, 0);
-                    return new Response(JSON.stringify(json), {
+                    const headers = new Headers(response.headers);
+                    headers.delete('content-encoding');
+                    headers.delete('content-length');
+                    const patchedResp = new Response(JSON.stringify(json), {
                         status: response.status,
                         statusText: response.statusText,
-                        headers: response.headers
+                        headers: headers
                     });
+                    try {
+                        Object.defineProperty(patchedResp, 'url', { value: response.url });
+                    } catch(e) {}
+                    return patchedResp;
                 }
             }
         } catch(e) {}
         return response;
     };
 
-    // ── 5. 拦截 XMLHttpRequest → 同步过滤 API ────────────────────
+    // ── 4. 安全拦截 XMLHttpRequest → 仅过滤 /player 与 /reel/ API ─
     const _origXHROpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
         this._ytAdBlockUrl = url || '';
@@ -1881,19 +1829,21 @@ let earlyInjectedScript = """
     const _origXHRSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function(body) {
         const url = this._ytAdBlockUrl || '';
-        if (url.includes('/youtubei/v1/player') ||
-            url.includes('/youtubei/v1/next') ||
-            url.includes('/youtubei/v1/browse') ||
-            url.includes('/youtubei/v1/search') ||
-            url.includes('/youtubei/v1/reel/')) {
+        if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/reel/')) {
             this.addEventListener('load', function() {
                 try {
-                    const json = _origJSONParse.call(JSON, this.responseText);
-                    if (json) {
+                    const rType = this.responseType;
+                    if (rType && rType !== 'text' && rType !== 'json') return;
+                    const json = (rType === 'json') ? this.response : JSON.parse(this.responseText);
+                    if (json && (json.adPlacements || json.playerAds || json.adSlots || json.playerResponse)) {
                         stripAdData(json, 0);
-                        const patched = JSON.stringify(json);
-                        Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
-                        Object.defineProperty(this, 'response',     { get: () => patched, configurable: true });
+                        if (rType === 'json') {
+                            Object.defineProperty(this, 'response', { get: () => json, configurable: true });
+                        } else {
+                            const patched = JSON.stringify(json);
+                            Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
+                            Object.defineProperty(this, 'response',     { get: () => patched, configurable: true });
+                        }
                     }
                 } catch(e) {}
             }, { once: true });
@@ -1901,7 +1851,7 @@ let earlyInjectedScript = """
         return _origXHRSend.apply(this, arguments);
     };
 
-    // ── 6. 预埋广告 CSS（atDocumentStart，安全挂载无闪烁） ───────────
+    // ── 5. 预埋广告 CSS（atDocumentStart，安全挂载无闪烁） ───────────
     function injectEarlyCSS() {
         const target = document.head || document.documentElement;
         if (!target) {
@@ -2114,7 +2064,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
     // MARK: - WKContentRuleList 网络层广告屏蔽
     func setupAdBlockContentRules(completion: @escaping () -> Void) {
-        let identifier = "YouTubeAdBlock_v5"
+        let identifier = "YouTubeAdBlock_v6"
         WKContentRuleListStore.default().lookUpContentRuleList(forIdentifier: identifier) { [weak self] cachedList, _ in
             if let cachedList = cachedList {
                 DispatchQueue.main.async {
@@ -2136,8 +2086,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/get_midroll_info"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"s\\\\.youtube\\\\.com/api/stats/ads"},"action":{"type":"block"}},
                 {"trigger":{"url-filter":"i\\\\.ytimg\\\\.com/an_webp/"},"action":{"type":"block"}},
-                {"trigger":{"url-filter":"yt3\\\\.ggpht\\\\.com/ytts/"},"action":{"type":"block"}},
-                {"trigger":{"url-filter":"www\\\\.youtube\\\\.com/youtubei/v1/log_event"},"action":{"type":"block"}}
+                {"trigger":{"url-filter":"yt3\\\\.ggpht\\\\.com/ytts/"},"action":{"type":"block"}}
             ]
             """
             WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: rules) { [weak self] ruleList, error in
