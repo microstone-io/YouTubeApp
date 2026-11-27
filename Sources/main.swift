@@ -18,12 +18,11 @@ let injectedScript = """
         Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true });
     } catch(e) {}
 
-    // 日志桥梁：将 JS 控制台日志实时同步至 Swift 及本地调试日志文件
+    // 日志桥梁：仅将本应用自身的 [Tag] 日志同步至 Swift，避免对 YouTube 内部海量日志做 JSON.stringify 卡顿主线程
     const origLog = console.log;
-    const origWarn = console.warn;
-    const origErr = console.error;
     function sendLog(lvl, args) {
         try {
+            if (!args.length || typeof args[0] !== 'string' || !args[0].startsWith('[')) return;
             const str = Array.from(args).map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
             if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.youtubeBridge) {
                 window.webkit.messageHandlers.youtubeBridge.postMessage({ action: 'log', level: lvl, text: str });
@@ -31,8 +30,6 @@ let injectedScript = """
         } catch(e) {}
     }
     console.log = function(...args) { origLog.apply(console, args); sendLog('INFO', args); };
-    console.warn = function(...args) { origWarn.apply(console, args); sendLog('WARN', args); };
-    console.error = function(...args) { origErr.apply(console, args); sendLog('ERR', args); };
 
     console.log('[YouTube Native App] Dual-Engine (16:9 Cinema + 9:16 FikFap Mode) Active');
 
@@ -78,7 +75,6 @@ let injectedScript = """
         ytd-player-legacy-desktop-watch-ads-renderer,
         #panels ytd-ads-engagement-panel-content-renderer,
         ytd-action-companion-ad-renderer,
-        tp-yt-paper-dialog:has(#feedback),
         .ytp-suggested-action-badge,
         ytd-ad-slot-renderer,
         .ytp-ad-player-overlay,
@@ -1417,7 +1413,7 @@ let injectedScript = """
         if (!backBtn) {
             backBtn = document.createElement('button');
             backBtn.id = 'yt-native-back-btn';
-            backBtn.innerHTML = '‹ 返回首页';
+            backBtn.textContent = '‹ 返回首页';
             backBtn.title = '返回首页 (快捷键 Esc)';
             backBtn.onclick = function() {
                 if (window.history.length > 1) {
@@ -1433,7 +1429,7 @@ let injectedScript = """
         if (!toggleBtn) {
             toggleBtn = document.createElement('button');
             toggleBtn.id = 'yt-native-toggle-btn';
-            toggleBtn.innerHTML = '💬 展开评论与推荐';
+            toggleBtn.textContent = '💬 展开评论与推荐';
             toggleBtn.title = '切换影院满屏 / 标准详情 (快捷键 W)';
             toggleBtn.onclick = function() {
                 toggleCinemaMode();
@@ -1448,7 +1444,7 @@ let injectedScript = """
         const toggleBtn = document.getElementById('yt-native-toggle-btn');
         if (isCinemaModeEnabled) {
             document.body.classList.add('cinema-mode-active');
-            if (toggleBtn) toggleBtn.innerHTML = '💬 展开评论与推荐';
+            if (toggleBtn) toggleBtn.textContent = '💬 展开评论与推荐';
             fitVideoToWindow();
         } else {
             document.body.classList.remove('cinema-mode-active');
@@ -1456,7 +1452,7 @@ let injectedScript = """
             document.body.classList.remove('hide-cursor');
             document.documentElement.style.removeProperty('overflow');
             document.body.style.removeProperty('overflow');
-            if (toggleBtn) toggleBtn.innerHTML = '🎬 影院满幅';
+            if (toggleBtn) toggleBtn.textContent = '🎬 影院满幅';
             const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
             if (video) {
                 video.style.removeProperty('position');
@@ -1554,14 +1550,16 @@ let injectedScript = """
             autoDismissContinueWatching();
             skipVideoAds();
         } else {
-            // 首页 / 列表页
-            document.body.classList.remove('cinema-mode-active');
-            document.body.classList.remove('cinema-vertical-mode');
-            document.body.classList.remove('cinema-playing');
-            document.body.classList.remove('cinema-active');
-            document.body.classList.remove('hide-cursor');
-            document.documentElement.style.removeProperty('overflow');
-            document.body.style.removeProperty('overflow');
+            // 首页 / 列表页：仅在尚未清理时重置，避免每帧重复操作 DOM
+            if (document.body.classList.contains('cinema-mode-active') ||
+                document.body.classList.contains('cinema-vertical-mode') ||
+                document.body.classList.contains('cinema-playing') ||
+                document.body.classList.contains('cinema-active') ||
+                document.body.classList.contains('hide-cursor')) {
+                document.body.classList.remove('cinema-mode-active', 'cinema-vertical-mode', 'cinema-playing', 'cinema-active', 'hide-cursor');
+                document.documentElement.style.removeProperty('overflow');
+                document.body.style.removeProperty('overflow');
+            }
         }
     }
 
@@ -1653,15 +1651,19 @@ let injectedScript = """
         showToast('⚠️ 当前网络连接断开，请检查网络或代理');
     });
 
-    // 18. 全局周期性轮询与页面切歌监听 (120ms 高频侦测，确保毫秒级感知切歌)
+    // 18. 全局周期性轮询与页面切歌监听（400ms 轻量轮询，首页跳过重度 DOM 扫描）
     setInterval(() => {
-        detectVideoOrientation();
+        const path = window.location.pathname;
+        const inPlayerPage = path.includes('/watch') || path.includes('/shorts');
+        if (!inPlayerPage) {
+            detectVideoOrientation();
+            updateWatchState();
+            return;
+        }
         hookVideoEvents();
-        checkShortsAutoPlay();
-        skipVideoAds();
         updateWatchState();
         checkPlaybackHealth();
-    }, 120);
+    }, 400);
 
     window.addEventListener('yt-navigate-finish', () => {
         lastQualityLockedVideo = '';
