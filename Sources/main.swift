@@ -1753,6 +1753,88 @@ let injectedScript = """
 })();
 """
 
+// 轻量级广告数据源净化脚本（atDocumentStart）：
+// - 仅针对播放器初始化变量 ytInitialPlayerResponse 与 /player、/reel/ 接口的 JSON 结果剔除广告字段
+// - 使用 Response.prototype.json 原地修改，不克隆/重建 Response，不触碰首页 /browse 接口，零卡顿风险
+let earlyInjectedScript = """
+(function() {
+    'use strict';
+    if (!window.location.hostname.includes('youtube.com')) return;
+
+    function stripAdData(obj, depth) {
+        if (!obj || typeof obj !== 'object') return obj;
+        if ((depth || 0) > 3) return obj;
+        const nextDepth = (depth || 0) + 1;
+        try {
+            if (Array.isArray(obj.adPlacements) && obj.adPlacements.length) obj.adPlacements = [];
+            if (Array.isArray(obj.playerAds) && obj.playerAds.length)       obj.playerAds = [];
+            if (Array.isArray(obj.adSlots) && obj.adSlots.length)           obj.adSlots = [];
+            if (obj.adBreakHeartbeatParams) delete obj.adBreakHeartbeatParams;
+            if (obj.playerResponse) stripAdData(obj.playerResponse, nextDepth);
+        } catch(e) {}
+        return obj;
+    }
+
+    // 1. 首屏播放器数据拦截
+    let _ytInitialPlayerResponse;
+    try {
+        Object.defineProperty(window, 'ytInitialPlayerResponse', {
+            get: function() { return _ytInitialPlayerResponse; },
+            set: function(val) { _ytInitialPlayerResponse = stripAdData(val, 0); },
+            configurable: true
+        });
+    } catch(e) {}
+
+    // 2. 原地净化 fetch().json() 返回的播放器与 Shorts 数据（零 Response 重建）
+    try {
+        const _origJson = Response.prototype.json;
+        Response.prototype.json = async function() {
+            const data = await _origJson.call(this);
+            try {
+                const url = this.url || '';
+                if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/reel/')) {
+                    stripAdData(data, 0);
+                }
+            } catch(e) {}
+            return data;
+        };
+    } catch(e) {}
+
+    // 3. 安全拦截 XHR（仅 /player 与 /reel/ 接口）
+    try {
+        const _origXHROpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+            this._ytAdBlockUrl = url || '';
+            return _origXHROpen.apply(this, arguments);
+        };
+        const _origXHRSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(body) {
+            const url = this._ytAdBlockUrl || '';
+            if (url.includes('/youtubei/v1/player') || url.includes('/youtubei/v1/reel/')) {
+                this.addEventListener('load', function() {
+                    try {
+                        const rType = this.responseType;
+                        if (rType && rType !== 'text' && rType !== 'json') return;
+                        const json = (rType === 'json') ? this.response : JSON.parse(this.responseText);
+                        if (json && (json.adPlacements || json.playerAds || json.adSlots || json.playerResponse)) {
+                            stripAdData(json, 0);
+                            if (rType === 'json') {
+                                Object.defineProperty(this, 'response', { get: () => json, configurable: true });
+                            } else {
+                                const patched = JSON.stringify(json);
+                                Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
+                                Object.defineProperty(this, 'response',     { get: () => patched, configurable: true });
+                            }
+                        }
+                    } catch(e) {}
+                }, { once: true });
+            }
+            return _origXHRSend.apply(this, arguments);
+        };
+    } catch(e) {}
+})();
+"""
+
 // 顶部 28px 原生拖拽标题栏：避让左侧交通灯与浮动按钮，中间宽广区域支持拖动与双击全屏
 class DraggableTitleBar: NSView {
     override var mouseDownCanMoveWindow: Bool {
@@ -1846,6 +1928,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         let userContentController = WKUserContentController()
         userContentController.add(self, name: "youtubeBridge")
+        // 轻量级数据源净化（atDocumentStart，仅主 frame）
+        let earlyScript = WKUserScript(source: earlyInjectedScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        userContentController.addUserScript(earlyScript)
         // 主脚本：影院引擎 + 广告跳过逻辑（atDocumentEnd，仅主 frame）
         let userScript = WKUserScript(source: injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         userContentController.addUserScript(userScript)
